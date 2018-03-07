@@ -1,0 +1,6 @@
+gtseq_run file
+gtseq58 gtseq58_sebastes_spid.xlsx
+gtseq59 gtseq59_sebastes_spid.xlsx
+gtseq60 gtseq60_sebastes_spid.xlsx
+gtseq62 gtseq62_sebastes_spid.xlsx
+gtseq63 gtseq63_sebastes_spid.xlsx

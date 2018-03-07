@@ -51,5 +51,11 @@ Then remove individuals missing genotype data at more than 15 loci. After conver
 
 8. This file will now include all baseline individuals as well as your (as yet unidentified samples) from your GTseq run. To run through gsi_sim/rubias, will need to split this file into your “baseline” which is just the individuals used in creating the species ID vcf. The second file will be your “mixture” file, which just includes the samples from your GTseq run that you would like to assign using the baseline.
 
-9. Can then modify these files to match format required for whatever analyses you are interested in running (i.e. gsi_sim, structure, etc.). 
+9. Can then modify these files to match format required for whatever analyses you are interested in running (i.e. gsi_sim, structure, etc.).
+
+## New workflow
+
+I'm going to mimic the NSF rockfish project and use the RDS genotype files, and then read them into this R project using the same code (or similar) as I did previously for my kelp rockfish.
+
+
 
