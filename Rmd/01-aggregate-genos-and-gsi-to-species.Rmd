@@ -83,6 +83,8 @@ and after filtering out indivs with fewer than 75 genotyped loci, we were left w
 `r length(unique(no_hi_missers$NMFS_DNA_ID))` individuals.  Those are the ones that
 we will run through rubias to identify to species.
 
+## Read in baseline genotypes and remove loci and individuals with too much missing data
+
 ```{r read-spp-genos}
 # read in genotypes identified to species using rubias
 spp <- read_csv("../data/reported_haplotype_SebSppID_11102017.csv")
@@ -97,10 +99,17 @@ spp.id <- select_spp %>%
 # only keep the loci that are not the 6 removed from the previous dataset
 spp.id_loc <- spp.id %>%
   anti_join(., to_remove, by = "locus")
+# that should leave 90 loci 
 
-# that should leave 90 loci  
 
-spp.id_loc1 <- spp.id_loc %>%
+# remove samples with missing data at more than 15 loci (per Hayley's workflow)
+spp.id_no_missers <- spp.id_loc %>%
+  group_by(indiv.ID) %>%
+  filter(sum(!is.na(allele)) >= (75*2))
+
+
+# add reference column to prepare data for rubias
+spp.id_loc1 <- spp.id_no_missers %>%
   mutate(sample_type = "reference")
 
 x <- spp.id_loc1 %>%
@@ -144,9 +153,8 @@ alle_idxs <- alleles %>%
   group_by(locus) %>%
   mutate(alleidx = as.integer(factor(allele, levels = unique(allele)))) %>%
   ungroup() %>%
-  arrange(indiv, locus, alleidx) #%>%
-  #mutate(alleidx = ifelse(is.na(alleidx), 0, alleidx)) # do not do this for Rubias - leave as NA's
-
+  arrange(indiv, locus, alleidx) # rubias can handle NA's, so no need to change them to 0's
+  
 # select just the columns to retain and spread the alleles
 alle_idx2 <- alle_idxs[,-7]
   
@@ -173,12 +181,26 @@ sp_mix <- two_col %>%
 
 sp_ref <- two_col %>%
   filter(sample_type == "reference")
+```
 
+
+```{r run-rubias}
 # Now that the data are in the corret format, load Rubias
 library(rubias)
 
-# perform self-assignment on baseline colony samples
-mix_assign <- infer_mixture(reference = sp_ref, mixture = sp_mix, gen_start_col = 5, method = "MCMC", alle_freq_prior = list(const_scaled = 1), reps = 2000, burn_in = 100, pb_iter = 100, sample_int_Pi = 1 )
+# perform self-assignment of reference samples
+ref_self <- self_assign(sp_ref, gen_start_col = 5)
+
+# and take a quick look at those assignments
+ref_self %>%
+  filter(inferred_repunit == repunit) %>%
+  filter(scaled_likelihood > 0.95)
+
+```
+
+```{r run-mixture}
+# perform mixture-assignment on baseline colony samples
+mix_assign <- infer_mixture(reference = sp_ref, mixture = sp_mix, gen_start_col = 5, method = "MCMC", reps = 2000, burn_in = 100)
 
 # That was fast, let's take a look
 head(mix_assign)
@@ -193,7 +215,7 @@ osu_assignments <- mix_assign$indiv_posteriors %>%
 
 osu_assign2 <- osu_assignments[,-10]
 
-write_csv(osu_assign2, "csv_outputs/osu_assignments.csv")
+#write_csv(osu_assign2, "csv_outputs/osu_assignments.csv")
 
 osu_assign2
 ```
@@ -230,7 +252,7 @@ kept_assignments <- mix_assign$indiv_posteriors %>%
 
 kept_assignments
 ```
-Using Hayley's threshold of 0.95 for the PofZ, we have 1,436 individuals retained.
+Using Hayley's threshold of 0.95 for the PofZ, we have 1,435 individuals retained.
 
 Now take a look at which fish from Brittany's samples are included:
 ```{r brits-assignemnts}
@@ -268,11 +290,10 @@ kept_assignments %>%
   select(1:9,11:30) %>%
   write_csv("csv_outputs/osu_kept_assignments.csv")
   
-
-
 ```
 
-To compare Brittany's assignments with rubias, I would need to separate the string of the repunit to get the species alone without the "S" prefix.
+
+## Repository meta data for Brittany's samples
 
 ```{r add-meta-data}
 batch_4792 <- read_csv("../extdata/batch4792.csv")
@@ -298,11 +319,73 @@ brit_all_assign %>%
   write_csv("csv_outputs/brittany_estuary_assignments.csv")
 
 # and a list of the samples that were not assigned (for one reason or another)
-brit_all_assign %>%
-  anti_join(., kept_assignments, by = c("NMFS_DNA_ID" = "indiv"))
+brit_missing <- brit_all_assign %>%
+  anti_join(., kept_assignments, by = c("NMFS_DNA_ID" = "indiv")) %>%
+  #group_by(BOX_ID) %>%
+  #tally() 
+  select(1:30) #%>%
+  #write_csv("csv_outputs/brittany_unassigned_samples.csv")
+  
 ```
 192 samples. That's still an unfortunate lot.
 I wonder if they are the same samples that didn't genotype well last time?
+
+```{r change-threshold}
+# if the assignment threshold is lower than 0.95, that might include more samples?
+ok_assignments <- mix_assign$indiv_posteriors %>%
+  group_by(indiv) %>%
+  filter(PofZ > 0.80) %>%
+  arrange(desc(PofZ))
+
+# and join those to Brittany's samples
+brit_all_assign %>%
+  anti_join(., ok_assignments, by = c("NMFS_DNA_ID" = "indiv"))
+
+```
+Still 192 samples!
+
+Of primary concern is whether we actually genotyped these at all. Let's go back to the data.
+```{r samples-run}
+samples %>%
+  anti_join(., brit_all_assign, by = "NMFS_DNA_ID")
+# 686 samples that were run that were not brittany's.
+
+brit_all_assign %>%
+  anti_join(., samples, by = "NMFS_DNA_ID")
+# 0 samples of brittany's that were not run.
+# well, at least that's good.
+
+# now check genotypes
+brit_all_assign %>%
+  anti_join(., genos, by = "NMFS_DNA_ID")
+# all of brittany's samples had genotypes that were read in from the rds files.
+
+# where were they kicked out?
+hi_missers <- brit_all_assign %>%
+  anti_join(., no_hi_missers, by = "NMFS_DNA_ID")
+
+missers_loci <- keepers %>% # keepers is the data frame after removing 6 loci
+  inner_join(., hi_missers, by = "NMFS_DNA_ID") %>%
+  group_by(NMFS_DNA_ID) %>%
+  select(NMFS_DNA_ID, allele) %>%
+  tally(is.na(allele)) %>%
+  mutate(missing_loci = n/2)
+
+# there shouldn't be any missers with < 15 missing loci
+missers_loci %>%
+  filter(missing_loci < 15) 
+  
+# stick that data table onto the 192 samples with too much missing data
+missers_loci %>%
+  left_join(., brit_missing, by = "NMFS_DNA_ID") %>%
+  select(1,3:17,19,21:24) %>%
+  write_csv("csv_outputs/OSU_unassigned_missing_data.csv")
+
+```
+Yup. The 192 samples are in the hi-missers data - they had lots of missing genotypes.
+
+
+## Looking at the success of re-genotyped samples
 
 ```{r tossers}
 # just the samples from gtseq 63
@@ -324,9 +407,8 @@ Plate 1 has the samples from plate R374 that need species ID – Brittany's samp
 Plate 2rr are all re-runs including your NSF black and yellow sibs and the rest of the failed samples from Bailey's run for Brittany's project. 
 
 ```{r easier-format}
-
 gtseq63 %>%
-  filter(ssBOX_ID == "R374")
+  filter(ssBOX_ID == "R282")
 ```
 
 ```{r re-runs}
@@ -340,4 +422,6 @@ All the samples from R373 were not re-runs. (23 samples)
 The 4 samples that failed from R374 were for Helen Killeen.
 
 47 -27 = 20 samples that failed from the re-runs? Was that out of 108 total?
+
+And if we did re-run all of Brittany's fish from previous runs, is the majority of the missing data from the new samples? 
 
