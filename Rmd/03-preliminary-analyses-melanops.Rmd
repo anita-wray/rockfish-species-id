@@ -1,0 +1,311 @@
+---
+title: "preliminary analysis for melanops"
+output: html_notebook
+---
+
+I need to see how variable the microhaplotype loci are in melanops, and whether we're likely to have power to do full-sibling analysis for the OSU estuary project.
+
+
+To start off with, let's load data and libs:
+```{r load-stuff}
+library(tidyverse)
+library(CKMRsim)
+library(stringr)
+library(readxl)
+
+genos <- readRDS("../data/processed/called_genos_na_explicit.rds") 
+data <- read_csv("csv_outputs/osu_estuary_assignments_05pofz.csv")
+
+# meta data for OSU samples
+batch_4792 <- read_csv("../extdata/batch4792.csv")
+batch_4969 <- read_csv("../extdata/batch4969.csv")
+
+# somehow the structure for the sample IDs is different in the two files...
+# change that.
+batch_4792$SAMPLE_ID <- as.character(batch_4792$SAMPLE_ID)
+
+# bind those things together
+meta <- bind_rows(batch_4969, batch_4792)
+```
+
+
+## Some initial filters
+
+### Take highest read-depth call for multiply-genotyped DNA_IDs
+
+I'm not sure if there are any of these, but best to leave it in here...
+particularly for the re-genotyped fish from Brittany's OSU samples.
+
+Now, here is a harder operation: if an individual is multiply-genotyped, take the
+genotype with the highest total read depth.  
+```{r take-just-one}
+# slow-ish function to get the total read depth column
+tdepth <- function(a, d) {
+  if(any(is.na(a))) {
+    return(NA)
+  }
+  if(a[1]==a[2]) {
+    return(d[1])
+  } else {
+    return(d[1] + d[2])
+  }
+  
+}
+# this takes the highest read-depth instance of each duplicately-genotyped individual.
+geno_one_each <- genos %>%
+  group_by(NMFS_DNA_ID, locus, gtseq_run, id) %>%
+  mutate(total_depth = tdepth(allele, depth)) %>%
+  ungroup() %>%
+  arrange(NMFS_DNA_ID, locus, total_depth, gtseq_run, id, depth) %>%
+  group_by(NMFS_DNA_ID, locus) %>%
+  mutate(rank = 1:n()) %>%
+  ungroup() %>%
+  filter(rank <= 2)
+```
+
+
+```{r just-melanops}
+smels <- data %>%
+  filter(collection == "Smelanops") # which fish are melanops?
+
+smels_genos <- geno_one_each %>%
+  right_join(., smels, by = "NMFS_DNA_ID") # get the genotypes for just the melanops
+
+smels_genos
+```
+
+## Remove problem loci
+
+I think I'll ditch just the 3 loci with extra haplotypes.
+
+according to Hayley's notes, these are:
+tag_id_1166 (often >2 haplotypes)
+tag_id_934 (missing data and sometimes >2 haplotypes)
+tag_id_2513 (appears to be some sort of repetitive element for some species outside of KGBC)
+
+```{r remove-problem-loci}
+probs <- c("tag_id_2513", "tag_id_934", "tag_id_1166")
+probs <- as.tibble(probs)
+probs <- probs %>%
+  rename(locus = value)
+
+probs
+
+# now remove those loci from the smels_genos
+smels_genos93 <- smels_genos %>%
+  anti_join(., probs, by = "locus")
+```
+Okay, with the three problem loci removed, let's try the CKMR workflow again:
+
+```{r ckmr-format}
+# we will use this some more
+smg2 <- smels_genos93 %>% 
+  select(NMFS_DNA_ID, locus, allele) %>%
+  mutate(Chrom = "GTseq") %>% 
+  mutate(Pos = as.integer(factor(locus, levels = unique(locus)))) %>%
+  rename(Locus = locus,
+         Allele = allele) %>%
+  select(NMFS_DNA_ID, Chrom, Locus, Pos, Allele) %>%
+  ungroup()
+
+# get the allele freqs
+smg_ckmr_markers <- smg2 %>%
+  filter(!is.na(Allele)) %>% # it is vital to filter out the NAs at this stage
+  group_by(Chrom, Locus, Pos, Allele) %>%
+  summarise(counts = n()) %>%
+  group_by(Locus, Pos) %>%
+  mutate(Freq = counts / sum(counts)) %>%
+  select(-counts) %>%
+  mutate(AlleIdx = 1,
+         LocIdx = 1) %>%
+  reindex_markers(.)
+
+# summary stats for the paper
+alle_counts <- smg_ckmr_markers %>% 
+  select(Locus, AlleIdx) %>%
+  group_by(Locus) %>%
+  count(Locus) %>%
+  arrange(desc(n))
+  
+al_cts <- as.tibble(alle_counts)
+
+sd(al_cts$n)
+mean(al_cts$n)
+
+write_csv(alle_counts, "csv_outputs/melanops_alleles.csv")
+```
+We have a total of `r nrow(smg_ckmr_markers)` in this data set.
+
+## Doing CKMR simulations to assess power
+
+Really simply let's just do this to see what our power for parentage ought to look like.
+```{r CKMR-create}
+CK <- create_ckmr(smg_ckmr_markers, kappa_matrix = kappas[c("PO", "FS", "HS", "U"), ])
+
+# see what it tells us when we print it:
+CK
+```
+I would expect 93 loci, but then again, if the additional 3 typically have missing data, they might not be in the data set? Not sure about this... I can come back and investigate.
+
+
+Then do the simulations to see what the false positive rates are for finding parents when the truth
+is U or FS:
+```{r CKMR-sim-and-sample}
+Qs <- simulate_Qij(C = CK, froms = c("PO", "FS", "HS", "U"), tos = c("PO", "FS", "HS", "U"), reps = 10^4)
+
+# then do the importance sampling to get the FPRs
+mc_sample_simple(Qs, nu = "FS", de = c("U"), tr = c("U", "FS", "HS", "PO"), method = "both")
+```
+That's like almost no power... but we have a small number of comparisons, relatively speaking, so let's just go with it.
+
+
+## Making genotype matrices
+```{r geno-matrix}
+smel_haps <- smels_genos93 %>%
+  filter(!is.na(allele)) %>%  # once again, it is critical to remove these at this point
+  select(NMFS_DNA_ID, locus, gene_copy, allele) %>%
+  rename(Locus = locus, Allele = allele)
+
+smel_idx_frame <- smg_ckmr_markers %>%
+  select(Locus, Allele, LocIdx, AlleIdx) %>%
+  group_by(Locus) %>%
+  mutate(NumA = n()) %>%  # get the number of alleles at each locus
+  ungroup() %>%
+  left_join(smel_haps, .)  %>%  # join the alle_idx's onto the actual genotype data
+  select(NMFS_DNA_ID, Locus, gene_copy, LocIdx, NumA, AlleIdx) %>%
+  spread(key = gene_copy, value = AlleIdx) %>%
+  mutate(GenoIdx = index_ab(a = `1`, b = `2`, A = NumA))
+
+# make a matrix of genotype integers 
+wide_smel <- smel_idx_frame %>%
+  select(NMFS_DNA_ID, LocIdx, GenoIdx) %>%
+  spread(data = ., key = LocIdx, value = GenoIdx)
+
+```
+
+Don't forget to set NA's to 0, and then decrease each value by 1:
+```{r make-mat}
+rocky_mat <- as.matrix(wide_smel[, -1])
+rownames(rocky_mat) <- wide_smel$NMFS_DNA_ID
+rocky_mat[is.na(rocky_mat)] <- 0
+rocky_mat <- rocky_mat - 1
+storage.mode(rocky_mat) <-  "integer"
+```
+
+## Looking for duplicated samples
+
+We can quickly look through rocky_mat for pairs of indivs with lots of matching genotypes.
+```{r check-for-dupes}
+matchers <- pairwise_geno_id(S = rocky_mat, max_miss = 12) %>%
+  arrange(num_mismatch) %>%
+  mutate(NMFS_DNA_ID_1 = rownames(rocky_mat)[ind1],
+         NMFS_DNA_ID_2 = rownames(rocky_mat)[ind2])
+matchers
+```
+
+Woah. What is going on here? Is it just a power issue?
+I'll come back to this...
+
+For now, to deal with these duplicates, here is what I will do: I am going to say that anyone with 3 or fewer mismatches is certainly 
+the same individual, and we are going to take just one from amongst those pairs/groups.  We use a hasty method:
+we toss out all the individuals that appear in both ind1 and ind2, and then all the remaining ind2's.  This 
+might throw out one more than we need to, but it is what we do for now.
+```{r toss-matchers}
+def_same <- matchers %>%
+  filter(num_mismatch <= 3)
+
+toss_these <- c(intersect(def_same$ind1, def_same$ind2), def_same$ind2) %>%
+  unique()
+
+rocky_mat_tossed <- rocky_mat[-toss_these,]
+```
+Before we removed sampled with 3 or fewer mismatches, we had `r nrow(rocky_mat)` and after removing those "duplicates", we have  `r nrow(rocky_mat_tossed)`.
+
+That ends up tossing hundreds of samples!
+
+
+## Before doing the comparisons, compute internal heterozygosities
+
+We want to have these to make sure we don't have contaminated individauls.
+```{r compute-int-hzs}
+int_hz <- smg2 %>% 
+  group_by(NMFS_DNA_ID, Locus) %>% 
+  summarise(hz = Allele[1]!=Allele[2]) %>% 
+  filter(!is.na(hz)) %>% 
+  group_by(NMFS_DNA_ID) %>% 
+  summarise(num_loc = n(), num_hz = sum(hz), fract_hz = num_hz / num_loc)
+```
+And now let us plot that .
+```{r plot-int-hz, fig.width=12}
+ggplot(int_hz, aes(x = fract_hz)) +
+  geom_density(fill = "orange", alpha = 0.3)
+```
+What an ugly thing! Also, the fract_hz is super low in this species.
+Maybe that means there were matching genotypes just because there is not enough variation in these markers in melanops.
+
+## Let's look for full-siblings
+
+## Doing the pairwise comparisons
+
+We need to flatten the CKMR object appropriately
+```{r flatten}
+# flatten those out
+fs_flat <- flatten_ckmr(CK, "FS")
+unrel_flat <- flatten_ckmr(CK, "U")
+
+# then compute the log-likelihoods for the full-sib relationship
+fs_u_flat <- fs_flat
+fs_u_flat$probs <- log(fs_flat$probs / unrel_flat$probs)
+
+```
+
+### Power for full-sib detection
+
+First, we want to see what the distributions of FS/U LogLs look like for
+FS, U, and HS.  This is pretty straightforward to do with the ckmr object we made:
+```{r plot-fs-logls, fig.width=8}
+fs_u <- extract_logls(Qs, numer = c(FS = 1), denom = c(U = 1))
+ggplot(fs_u, aes(x = logl_ratio, fill = true_relat)) +
+  geom_density(alpha = 0.25) +
+  ggtitle("FS/U Log-likelihood Ratios")
+```
+There's a lot of overlap between the distribution of full-sibs and the unrelated distribution.
+But if a comparision has a log-likelihood ratio well above 5, it might have potential.
+
+```{r bung-compare-filter}
+
+# then do the comparisons, only keep the top 20 for each one
+idx <- 1:nrow(rocky_mat_tossed)
+names(idx) <- idx
+fs_comps <- lapply(idx, function(i) {
+    tmp <- comp_ind_pairwise(S = rocky_mat_tossed, T = rocky_mat_tossed, t = i, values = fs_u_flat$probs, nGenos = fs_u_flat$nGenos, Starts = fs_u_flat$base0_locus_starts)
+    tmp[rev(top_index(tmp$value, 20)), ]
+    }) %>%
+  dplyr::bind_rows(.id = "member1") %>%
+  dplyr::tbl_df() %>%
+  rename(member2 = ind) %>%
+  mutate(member1 = as.integer(member1)) %>%
+  filter(member1 < member2) %>%
+  mutate(name1 = rownames(rocky_mat_tossed)[member1],
+         name2 = rownames(rocky_mat_tossed)[member2]) %>%
+  arrange(desc(value))
+
+
+mini_meta <- meta %>%
+  select(NMFS_DNA_ID, REPORTED_LIFE_STAGE, COLLECTION_DATE)
+mm1 <- mini_meta
+names(mm1) <- c("name1", "stage1", "date1")
+mm2 <- mini_meta
+names(mm2) <- c("name2", "stage2", "date2")
+
+fs_comps_meta <- fs_comps %>%
+  left_join(., mm1) %>%
+  left_join(., mm2)
+
+fs_comps_meta
+```
+Hard to know if any of these are really plausible given the overlapping distributions between unrelated and full-sibs.
+
+In reality, we probably don't just don't have the power with these markers.
+
+
