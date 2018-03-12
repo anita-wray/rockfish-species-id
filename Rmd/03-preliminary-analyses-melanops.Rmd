@@ -309,3 +309,23 @@ Hard to know if any of these are really plausible given the overlapping distribu
 In reality, we probably don't just don't have the power with these markers.
 
 
+### Quick check with Brittany's meta data
+
+Carlos said that there were some of Brittany's samples not included in the data (IDs 987-1003).
+
+```{r read-in-carlos-data}
+brit_complete <- read_csv("../extdata/brittany_osu_samplesheets/Schwartzkopf_Rockfish_EstuaryData(Final).csv")
+
+brit_complete <- brit_complete %>% 
+  select(1:8)
+
+# the ID column is an integer... change that
+brit_complete$ID <- as.character(brit_complete$ID)
+
+# Are those sample IDs in the batch information
+meta %>%
+  filter(SAMPLE_ID == 1000)
+
+
+```
+

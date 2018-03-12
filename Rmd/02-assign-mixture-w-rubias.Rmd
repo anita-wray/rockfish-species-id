@@ -23,13 +23,16 @@ samples <- readRDS("../data/processed/sample-sheet-tibble.rds") #%>%
 # meta data for OSU samples
 batch_4792 <- read_csv("../extdata/batch4792.csv")
 batch_4969 <- read_csv("../extdata/batch4969.csv")
+batch_4969_ext <- read_csv("../extdata/batch4969_addition.csv")
+
 
 # somehow the structure for the sample IDs is different in the two files...
 # change that.
 batch_4792$SAMPLE_ID <- as.character(batch_4792$SAMPLE_ID)
+batch_4969_ext$SAMPLE_ID <- as.character(batch_4969_ext$SAMPLE_ID)
 
 # bind those things together
-meta <- bind_rows(batch_4969, batch_4792)
+meta <- bind_rows(batch_4969, batch_4792, batch_4969_ext)
 ```
 ## Some initial filters
 
