@@ -263,7 +263,7 @@ brit_all_assign <- meta %>%
   left_join(., kept_assignments, by = c("NMFS_DNA_ID" = "indiv"))
 
 brit_all_assign %>%
-  select(1:5,7:9,17,25:30) %>%
+  select(1:5,7:9,17,25:32) %>%
   write_csv("csv_outputs/osu_estuary_assignments_05pofz.csv")
 
 # and a list of the samples that were not assigned (for one reason or another)
@@ -271,10 +271,36 @@ brit_missing <- brit_all_assign %>%
   anti_join(., kept_assignments, by = c("NMFS_DNA_ID" = "indiv")) %>%
   #group_by(BOX_ID) %>%
   #tally() 
-  select(1:30) %>%
+  select(1:32) %>%
   write_csv("csv_outputs/osu_unassigned_samples_05pofz.csv")
   
 ```
 Only three samples are missing without the missing data threshold of 15 loci and using a PofZ assignment threshold of > 0.5.
 
+## Samples for Helen Killeen
 
+We genotyped 8 samples to test the preservation method that a grad student at Bodega is using...
+
+```{r read-in-data}
+r374 <- read_xls("../extdata/R374.xls", sheet = "Repository")
+
+# nmfs IDs for Helen's samples
+h_ids <- c("R035653", "R035654","R035655","R035656","R035657","R035658","R035659", "R035660")
+h_ids <- as.tibble(h_ids)
+# rename
+h_ids1 <- h_ids %>%
+  rename(NMFS_DNA_ID = value)
+
+# join to filter just the desired samples
+h_metadata <- r374 %>%
+  inner_join(., h_ids1, by = "NMFS_DNA_ID")
+
+# join to get just the assignments for helen's data
+kept_assignments %>%
+  right_join(., h_metadata, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  select(-10) %>% # get rid of the missing loci column because it doesn't print well to a csv.
+  write_csv("csv_outputs/Killeen_sample_assignments_w_metadata.csv")
+  
+```
+
+That should do it for what Carlos wants to give Helen.

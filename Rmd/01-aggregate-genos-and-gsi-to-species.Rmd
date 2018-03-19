@@ -397,8 +397,8 @@ gtseq63 %>%
   left_join(., kept_assignments, by = c("NMFS_DNA_ID" = "indiv")) %>%
   select(1:2, 5:7, 17:22) %>%
   #write_csv("csv_outputs/gtseq63_assignments.csv")
-  filter(ssBOX_ID == "R374") %>%
-  write_csv("csv_outputs/gtseq63_R374_assignments.csv")
+  filter(ssBOX_ID == "R374") #%>%
+  #write_csv("csv_outputs/gtseq63_R374_assignments.csv")
 
 ```
 Here's what Cassie said was in that run:
