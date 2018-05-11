@@ -6,8 +6,6 @@ output:
 ---
 
 
-
-
 To start off with, let's load data and libs:
 ```{r load-stuff}
 library(tidyverse)
