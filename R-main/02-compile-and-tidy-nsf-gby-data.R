@@ -32,23 +32,23 @@ genos_long <- lapply(1:nrow(fdf), function(i) {
 }) %>%
   bind_rows()
 
-# need to change the character GTseq to gtseq to match the sample sheet tibble
-v1 <- genos_long %>%
-  mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq21"), "gtseq21"))
-v2 <- v1 %>%
-  mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq43"), "gtseq43"))
-v3 <- v2 %>%
-  mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq44"), "gtseq44"))
-v4 <- v3 %>%
-  mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq45"), "gtseq45"))
-v5 <- v4 %>%
-  mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq47"), "gtseq47"))
-v6 <- v5 %>%
-  mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq49"), "gtseq49"))
-v7 <- v6 %>%
-  mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq50"), "gtseq50"))
-genos_long <- v7 %>%
-  mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq54"), "gtseq54"))
+# # need to change the character GTseq to gtseq to match the sample sheet tibble
+# v1 <- genos_long %>%
+#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq21"), "gtseq21"))
+# v2 <- v1 %>%
+#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq43"), "gtseq43"))
+# v3 <- v2 %>%
+#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq44"), "gtseq44"))
+# v4 <- v3 %>%
+#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq45"), "gtseq45"))
+# v5 <- v4 %>%
+#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq47"), "gtseq47"))
+# v6 <- v5 %>%
+#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq49"), "gtseq49"))
+# v7 <- v6 %>%
+#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq50"), "gtseq50"))
+# genos_long <- v7 %>%
+#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq54"), "gtseq54"))
 
 # we go ahead and save it in data/processed, with xz compression
 saveRDS(genos_long, file = "nsf_data/processed/called_genos.rds", compress = "xz")

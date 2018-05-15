@@ -23,9 +23,7 @@ samples <- readRDS("../nsf_data/processed/sample-sheet-tibble.rds") #%>%
 ### Take highest read-depth call for multiply-genotyped DNA_IDs
 
 I'm not sure if there are any of these, but best to leave it in here...
-particularly for the re-genotyped fish from Brittany's OSU samples.
-
-Now, here is a harder operation: if an individual is multiply-genotyped, take the
+if an individual is multiply-genotyped, take the
 genotype with the highest total read depth.  
 ```{r take-just-one}
 # slow-ish function to get the total read depth column
@@ -94,26 +92,28 @@ spp.id <- select_spp %>%
 spp.id_loc <- spp.id %>%
   anti_join(., to_remove, by = "locus")
 # that should leave 90 loci 
+```
 
-# remove samples with missing data at more than 15 loci (per Hayley's workflow)
-#spp.id_no_missers <- spp.id_loc %>%
-#  group_by(indiv.ID) %>%
-#  filter(sum(!is.na(allele)) >= (75*2))
-
+From the .csv output from microhaplot, we need to reform the data for rubias.
+```{r format-reference-for-rubias}
 # add reference column to prepare data for rubias
 spp.id_loc1 <- spp.id_loc %>%
   mutate(sample_type = "reference")
 
+# add the repunit column that is identical to the group in this case
 x <- spp.id_loc1 %>%
   mutate(repunit = group)
 
-# reorder the columns and get it in the right format
+# reorder the columns and get the data frame in the right format
 spp.id1 <- x[,c(6,7,1,3,2,4:5)]
 spp.id2 <- spp.id1 %>%
   rename(collection = group) %>%
   rename(indiv = indiv.ID)
+```
 
-# get the data frames into the same format
+To ensure that haplotypes are coded identically across both the reference and mixture genotypes, we need to combine the two data sets, and then change haplotypes into numeric alleles.
+```{r format-the-mixture}
+# get the reference and mixture data frames into the same format
 no_hi_missers2 <- no_hi_missers %>%
   dplyr::select(NMFS_DNA_ID, locus, gene_copy, allele) %>%
   rename(indiv = NMFS_DNA_ID) %>%
@@ -121,16 +121,14 @@ no_hi_missers2 <- no_hi_missers %>%
   mutate(repunit = NA) %>%
   mutate(collection = "nsf_samples")
 
-# reorder
-no_hi_missers2[, c(5:7,1:4)]
+# reorder the columns for the mixture data frame
+no_hi_missers3 <- no_hi_missers2[, c(5:7,1:4)]
 
-# combine the data into a single df
-alleles <- bind_rows(spp.id2, no_hi_missers2)
-
-alleles
+# combine both data sets into a single df
+alleles <- bind_rows(spp.id2, no_hi_missers3)
 ```
 
-We are going to do this by turning alleles into integers and spreading it and then getting it into the right format to run rubias.
+Here we turn alleles into integers, spread the data frame, and then get it into the right format to run rubias:
 ```{r spread-genos}
 # first make integers of the alleles
 alle_idxs <- alleles %>% 
@@ -147,17 +145,14 @@ two_col <- alle_idx2 %>%
   unite(loc, locus, gene_copy, sep = ".") %>%
   spread(loc, alleidx)
 
-two_col
-
 # write this file to a thing that can be read-into other softwares
 #two_col %>%
 # write_csv("csv_outputs/genos_two_col.csv")
 ```
 
-I need to use `infer_mixture` in rubias, which requires two separate data frames, one with the reference genotypes and the other with the mixture. 
+We will use `infer_mixture` in rubias, which requires two separate data frames, one with the reference genotypes and the other with the mixture. 
 
-I'll split the data frame that I created, but it needed to be bunged together for the conversion of alleles to integers.
-
+I'll split the data frame that I created (but it needed to be bunged together for the conversion of alleles to integers).
 ```{r split-frames}
 # split up the reference and mixture data frames
 sp_mix <- two_col %>%
@@ -167,22 +162,7 @@ sp_ref <- two_col %>%
   filter(sample_type == "reference")
 ```
 
-
-```{r run-rubias}
-# Now that the data are in the corret format, load Rubias
-library(rubias)
-
-# perform self-assignment of reference samples
-ref_self <- self_assign(sp_ref, gen_start_col = 5)
-
-# and take a quick look at those assignments
-ref_self %>%
-  filter(inferred_repunit == repunit) %>%
-  filter(scaled_likelihood > 0.95)
-
-```
-I think I'll keep everybody in for this analysis.
-
+Now, with the two data frames separated, run the `infer mixture` analysis:
 ```{r run-mixture}
 # perform mixture-assignment on baseline colony samples
 mix_assign <- infer_mixture(reference = sp_ref, mixture = sp_mix, gen_start_col = 5, method = "MCMC", reps = 2000, burn_in = 100)
@@ -194,25 +174,72 @@ head(mix_assign)
 mix_assign$indiv_posteriors %>%
   arrange(desc(log_likelihood))
 
-# are there any rockfish that don't seem like the correct species is in the reference?
+# look at the fish that were assigned with 95% confidence
 nsf_assignments <- mix_assign$indiv_posteriors %>%
-  filter(PofZ == 1)
+  filter(PofZ > 0.95) 
 
-nsf_assign2 <- nsf_assignments[,-10]
-
-#write_csv(osu_assign2, "csv_outputs/osu_assignments.csv")
-
-nsf_assign2 %>%
-  filter(z_score > -2 & z_score < 2) %>%
+grp_tally <- nsf_assignments[,-10] %>% # drop the missing loci column 
+  filter(z_score > -2 & z_score < 2) %>% # only within 2 standard deviations
   group_by(repunit) %>%
-  tally() #%>%
+  tally()
   #write_csv("../nsf_data/spp_assignments_1-PofZ_zscore2.csv")
+  
 ```
 The posterior means of group membership in each collection is in the PofZ column.
 
+Make a quick little plot to display the diversity of species in our NSF juvenile samples.
+```{r quick-plot}
+# ordered by number of samples
+ggplot(grp_tally, (aes(x = reorder(repunit, -n), y = n))) + 
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  ylab("Samples") +
+  xlab("Species") +
+  theme(
+    axis.text.x = element_text(angle = 45, size = 16),
+    axis.text.y = element_text(size = 16),
+    axis.title = element_text(size = 18)) +
+  scale_color_brewer(palette = "Set1")
+
+  
+ggsave("pdf_outputs/nsf_juv_id.pdf", height = 7, width = 12)
+```
+
+```{r}
+# Now just the non-KGBC
+grp_tally %>%
+  filter(repunit != "Satrovirens" & repunit != "Scarnatus" & repunit != "Schrysomelas" & repunit !="Scaurinus") %>%
+  ggplot((aes(x = reorder(repunit, -n), y = n))) + 
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  ylab("Samples") +
+  xlab("Species") +
+  theme(
+    axis.text.x = element_text(angle = 45, size = 16),
+    axis.text.y = element_text(size = 16),
+    axis.title = element_text(size = 18)) +
+  scale_color_brewer(palette = "Set1")
+
+
+ggsave("pdf_outputs/non_kgbc_juv_id.pdf", height = 7, width = 10)
+
+
+grp_tally %>%
+  filter(repunit != "Satrovirens" & repunit != "Scarnatus" & repunit != "Schrysomelas" & repunit !="Scaurinus") %>% ungroup %>%
+  arrange(desc(n))
+
+
+
+# maybe I could color the bars if they are part of the pteropodus family?
+# ptero <- c("Satrovirens", "Scarnatus", "Scaurinus", "Schrysomelas", "Snebulosus")
+# 
+# ptero
+```
+
+
 ```{r lesser-assignments}
-# I think there are individual assignments for each sample to each reference.
-# I want to take only the top assignment for each sample.
+# There are individual assignments for each sample to each reference.
+# If I want to keep the top assignment for each sample:
 kept_assignments <- mix_assign$indiv_posteriors %>%
   group_by(indiv) %>%
   filter(PofZ > 0.5) %>%
@@ -221,4 +248,4 @@ kept_assignments <- mix_assign$indiv_posteriors %>%
 kept_assignments
 ```
 
-The output here, particularly the z-scores, makes me think that something is awry.
+
