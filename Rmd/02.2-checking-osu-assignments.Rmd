@@ -1,11 +1,12 @@
 ---
-title: "assign sample mixture with rubias"
+title: "checking copper assignments for Brittany (OSU)"
 output: html_notebook
 ---
 
-We want to create a more liberal missing data threshold that is appropriate for species that are phylogentically distant from kelp rockfish.
+After the first set of species ID for Brittany's OSU estuary rockfish project, she had a couple of copper assignments that didn't make much sense biologically - i.e. the juveniles were VERY small in September, when typically copper rockfish extrude their larvae in early springtime.
 
-Much of this is redundant from `01-aggregate-genos-and-gsi-to-species` but without the missing data threshold of 15 loci.
+I figured out that there were three copper samples in the baseline that assigned to gopher rockfish with high confidence (>0.95) and want to exclude those from a re-analysis just to see if that changes anything. 
+
 
 To start off with, let's load data and libs:
 ```{r load-stuff}
@@ -34,6 +35,7 @@ batch_4969_ext$SAMPLE_ID <- as.character(batch_4969_ext$SAMPLE_ID)
 # bind those things together
 meta <- bind_rows(batch_4969, batch_4792, batch_4969_ext)
 ```
+
 ## Some initial filters
 
 ### Take highest read-depth call for multiply-genotyped DNA_IDs
@@ -68,7 +70,6 @@ geno_one_each <- genos %>%
   filter(rank <= 2)
 ```
 
-
 ### Remove the 6 loci which Hayley has been removing
 
 ```{r remove-loci}
@@ -92,8 +93,6 @@ keepers %>%
   filter(missing_loci > 25)
 
 ```
-There are 28 total fish that are excluded because of missing > 25 loci. Of those 28, 11 are missing data at all 90 loci.
-
 There are 90 total loci, so we don't want to include samples with fewer than 25 loci with data.
 
 ### Toss out indivs with data at fewer than 25 loci
@@ -196,6 +195,7 @@ sp_ref <- two_col %>%
   filter(sample_type == "reference")
 ```
 
+## Self-assignment
 
 ```{r run-rubias}
 # Now that the data are in the corret format, load Rubias
@@ -211,101 +211,116 @@ ref_self %>%
 
 ```
 
-Look at any samples that were assigned at lower than .95 in the baseline 
+Look at any copper samples that were assigned at lower than .95 in the baseline 
 (this is one way I will deal with the missing data bias across phylogenetic distance)
 ```{r remove-losers}
-ref_self %>%
+false_coppers <- ref_self %>%
   filter(inferred_repunit != repunit) %>%
   filter(scaled_likelihood > 0.75) %>%
   #arrange(desc(n_miss_loci))
-  filter(collection == "Scaurinus")
-
+  filter(collection == "Scaurinus") %>%
+  select(indiv)
 
 ```
-A bunch of black-and-yellow and gopher samples.
-I think I'll keep everybody in for this analysis.
 
-```{r run-mixture}
+Exclude these three copper samples from the baseline and then re-run the self-assignment analysis:
+
+```{r exclude-rerun}
+# keep all of the samples except the false coppers
+revised_ref <- sp_ref %>%
+  anti_join(., false_coppers)
+
+# perform self-assignment of reference samples
+sa_revised <- self_assign(revised_ref, gen_start_col = 5)
+
+# and take a quick look at those assignments
+sa_revised %>%
+  filter(inferred_repunit == repunit) %>%
+  filter(scaled_likelihood > 0.5) %>%
+  filter(collection == "Scaurinus")
+
+```
+All of those copper assignments have a scaled-likelihood of 1.
+
+## Mixture assignment
+
+Now try the mixture assignment:
+```{r mixture}
 # perform mixture-assignment on osu samples
-mix_assign <- infer_mixture(reference = sp_ref, mixture = sp_mix, gen_start_col = 5, method = "MCMC", reps = 2000, burn_in = 100)
+mixture_assign <- infer_mixture(reference = revised_ref, mixture = sp_mix, gen_start_col = 5, method = "MCMC", reps = 2000, burn_in = 100)
 
 # That was fast, let's take a look
-head(mix_assign)
+head(mixture_assign)
 
 # the individual data is in 
-mix_assign$indiv_posteriors %>%
+mixture_assign$indiv_posteriors %>%
   arrange(desc(log_likelihood))
 
 # are there any rockfish that don't seem like the correct species is in the reference?
-osu_assignments <- mix_assign$indiv_posteriors %>%
+osu_assignments <- mixture_assign$indiv_posteriors %>%
   filter(PofZ == 1)
 
+# get rid of the missing loci column because it messes up the .csv 
 osu_assign2 <- osu_assignments[,-10]
 
-#write_csv(osu_assign2, "csv_outputs/osu_assignments.csv")
-
-osu_assign2
+# take a look at the z-scores for samples assigned to copper
+osu_assign2 %>%
+  filter(repunit == "Scaurinus") %>%
+  filter(z_score > 2)
 ```
-The posterior means of group membership in each collection is in the PofZ column - there are 1,220 individuals with a PofZ = 1.
+There are 23 (out of 111) copper samples with a z-score > 2, indicating that they are two standard deviations away from the mean for copper samples. However, none of them have a z-score > 3, so no obvious major species misassignments here.
 
-```{r lesser-assignments}
-# I think there are individual assignments for each sample to each reference.
+It might be a bit more worrisome if the particular samples that Brittany is concerned about also have the highest z-scores.
+
+```{r all-assignments}
+# I there are individual assignments for each sample to each reference.
 # I want to take only the top assignment for each sample.
-kept_assignments <- mix_assign$indiv_posteriors %>%
+keeper_assign <- mixture_assign$indiv_posteriors %>%
   group_by(indiv) %>%
   filter(PofZ > 0.5) %>%
   arrange(desc(PofZ))
 
-kept_assignments
+keeper_assign
 ```
+
+## Add some meta data 
 
 Using a PofZ of 0.5, we keep everyone in the assignment data frame.
 
 The `meta` file should contain all the samples for Brittany's project.
 
-```{r meta-assign}
+```{r add-meta-data}
 brit_all_assign <- meta %>%
-  left_join(., kept_assignments, by = c("NMFS_DNA_ID" = "indiv"))
+  left_join(., keeper_assign, by = c("NMFS_DNA_ID" = "indiv"))
 
 brit_all_assign %>%
   select(1:5,7:9,17,25:32) %>%
-  write_csv("csv_outputs/osu_estuary_assignments_05pofz.csv")
+  write_csv("csv_outputs/updated_osu_estuary_assignments_05pofz.csv")
 
+```
+
+Unassigned samples:
+```{r}
 # and a list of the samples that were not assigned (for one reason or another)
-brit_missing <- brit_all_assign %>%
-  anti_join(., kept_assignments, by = c("NMFS_DNA_ID" = "indiv")) %>%
+brit_all_assign %>%
+  anti_join(., keeper_assign, by = c("NMFS_DNA_ID" = "indiv")) %>%
   #group_by(BOX_ID) %>%
   #tally() 
   select(1:32) %>%
-  write_csv("csv_outputs/osu_unassigned_samples_05pofz.csv")
-  
-```
-Only three samples are missing without the missing data threshold of 15 loci and using a PofZ assignment threshold of > 0.5.
-
-## Samples for Helen Killeen
-
-We genotyped 8 samples to test the preservation method that a grad student at Bodega is using...
-
-```{r read-in-data}
-r374 <- read_xls("../extdata/R374.xls", sheet = "Repository")
-
-# nmfs IDs for Helen's samples
-h_ids <- c("R035653", "R035654","R035655","R035656","R035657","R035658","R035659", "R035660")
-h_ids <- as.tibble(h_ids)
-# rename
-h_ids1 <- h_ids %>%
-  rename(NMFS_DNA_ID = value)
-
-# join to filter just the desired samples
-h_metadata <- r374 %>%
-  inner_join(., h_ids1, by = "NMFS_DNA_ID")
-
-# join to get just the assignments for helen's data
-kept_assignments %>%
-  right_join(., h_metadata, by = c("indiv" = "NMFS_DNA_ID")) %>%
-  select(-10) %>% # get rid of the missing loci column because it doesn't print well to a csv.
-  write_csv("csv_outputs/Killeen_sample_assignments_w_metadata.csv")
+  write_csv("csv_outputs/updated_osu_unassigned_samples_05pofz.csv")
   
 ```
 
-That should do it for what Carlos wants to give Helen.
+
+One final thing - can I quickly look at the sample date of the copper rockfish?
+
+```{r}
+brit_all_assign %>%
+  filter(repunit == "Scaurinus") %>%
+  select(COLLECTION_DATE, LENGTH, z_score, PofZ)
+  
+```
+Well, still a number of copper rockfish assignments in September, including the two tiny fish (25 and 26 mm, I'd assume).
+
+The only other question would be if the meta data got mixed up. But generally, that would result in an off-set or issues for many samples rather than just two. 
+

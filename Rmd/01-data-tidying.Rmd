@@ -1,0 +1,22 @@
+---
+title: "Initial-data-tidying"
+output: html_notebook
+---
+
+Currently, there are multiple output genotype files from MICROHAPLOT for the five sequencing runs that I'm going to be analyzing here.
+
+The sample ID numbers in those files are not unique identifiers by themselves (but are unique when combined with the GTseq run number). 
+
+The sample ID is connected back to the NMFS DNA ID in the sample sheet.
+
+My initial moves here will be to get those data into a reasonable format to make things easier down the line.
+
+```{r }
+genos_long %>%
+  filter(gtseq_run == "GTseq63") %>%
+  dplyr::select(id) %>%
+  unique()
+
+```
+
+

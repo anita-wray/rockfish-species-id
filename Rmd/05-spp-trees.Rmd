@@ -1,0 +1,247 @@
+---
+title: "tree experiments"
+output: html_notebook
+---
+
+I want to explore the phylogenetics of the species ID panel a bit more...
+Here, trying out some R packages to build a tree.
+
+```{r}
+# load packages
+library(data.tree)
+library(tidyverse)
+```
+
+```{r}
+# load the data
+# read in genotypes identified to species using rubias
+spp <- read_csv("../data/reported_haplotype_SebSppID_11102017.csv")
+
+select_spp <- spp %>%
+  select(group, locus, indiv.ID, haplotype.1, haplotype.2)
+
+spp.id <- select_spp %>%
+  gather("gene_copy", "allele", 4:5) %>%
+  mutate(gene_copy = ifelse(gene_copy == "haplotype.1", 1, 2))
+
+# read in a list of the 6 loci
+to_remove <- read_csv("../data/loci_to_remove.csv")
+
+# only keep the loci that are not those 6
+spp.id_loc <- spp.id %>%
+  anti_join(., to_remove, by = "locus")
+# that should leave 90 loci 
+```
+
+Here we turn alleles into integers, spread the data frame, and then get it into the right format to run rubias:
+```{r spread-genos}
+spp_data <- spp.id_loc %>%
+  mutate(indiv = paste(group, indiv.ID, sep = "_"))
+
+# first make integers of the alleles
+alle_idxs <- spp_data %>% 
+  select(indiv, locus, gene_copy, allele) %>%
+  group_by(locus) %>%
+  mutate(alleidx = as.integer(factor(allele, levels = unique(allele)))) %>%
+  ungroup() %>%
+  arrange(indiv, locus, alleidx) %>%
+  select(-allele) # rubias can handle NA's, so no need to change them to 0's
+  
+
+two_col <- alle_idxs %>%
+  unite(loc, locus, gene_copy, sep = ".") %>%
+  spread(loc, alleidx)
+
+# write this file to a thing that can be read-into other softwares
+two_col %>%
+  write_csv("csv_outputs/spp_baseline_genos_two_col.csv")
+```
+
+Turn that into a genepop file and read in back in...
+```{r}
+library(adegenet)
+
+spp.v2 <- read.genepop("../data/genepop/spp_id_2d_v2.gen")
+
+
+check <- genind2df(spp.v2)
+dim(check)
+
+
+check[, 1:20]
+
+```
+
+
+```{r}
+D <- dist(tab(spp.v2))
+
+tre <- njs(D)
+par(xpd=TRUE)
+plot(tre, type="unrooted", edge.w=2)
+edgelabels(tex=round(tre$edge.length,1), bg=rgb(.8,.8,1,.8))
+
+```
+
+```{r}
+# use the mean frequencies for the NAs and then check data structure
+X1 <- tab(spp.v2, freq = TRUE, NA.method = "mean")
+
+# do the pca on the data matrix generated from the genepop file
+pca2 <- dudi.pca(X1, scale = FALSE, scannf = TRUE)
+
+# plot the pca with species data
+s.class(pca2$li, pop(spp.v2))
+
+```
+```{r}
+spp.all <- summary(pop(spp.v2))
+```
+
+```{r}
+scaleGen(spp.v2, center = TRUE, scale = TRUE,
+  NA.method = c("asis"), truenames = TRUE)
+
+
+pop(spp.v2)
+```
+
+```{r}
+
+
+library(hierfstat)
+
+
+```
+
+
+
+One metric to look at the ascertainment bias is the decreasing heterozygosity of this locus panel moving phylogenetically away from kelp rockfish.
+```{r compute-int-hzs}
+int_hz <- spp.id_loc %>% 
+  group_by(indiv.ID, locus) %>% 
+  summarise(hz = allele[1]!=allele[2]) %>% 
+  filter(!is.na(hz)) %>% 
+  group_by(indiv.ID) %>% 
+  summarise(num_loc = n(), num_hz = sum(hz), fract_hz = num_hz / num_loc)
+
+```
+
+Put the group info back and calculate mean heterozygosity per group.
+```{r}
+grp_hz <- spp.id %>%
+  select(group, indiv.ID) %>%
+  unique() %>%
+  left_join(int_hz, by = "indiv.ID") %>%
+  arrange(desc(fract_hz)) %>%
+  group_by(group) %>%
+  select(group, indiv.ID, fract_hz) %>%
+  mutate(mean_hz = mean(fract_hz)) %>%
+  select(group, mean_hz) %>%
+  arrange(desc(mean_hz)) %>%
+  unique() #%>%
+  #write_csv("csv_outputs/grp_mean_hz.csv")
+```
+
+Plot that... or versions of that
+```{r}
+ggplot(grp_hz, aes(x = reorder(group, -mean_hz), y = mean_hz)) +
+  geom_bar(stat = "identity") +
+  xlab("Species") +
+  ylab("Mean heterozygosity") +
+  theme(
+    axis.text.x = element_text(angle = 45)
+  )
+  
+```
+
+```{r}
+# maybe I could color the bars if they are part of the pteropodus family?
+ptero_grp_hz <- grp_hz %>%
+  mutate(subgenus = ifelse(group == "Satrovirens" | group =="Scarnatus" | group =="Scaurinus" | group =="Schrysomelas" | group =="Snebulosus" | group =="Smaliger" | group =="Srastrelliger" | group =="Snivosus", "pteropodus", "other")) %>%
+  
+ptero_grp_hz %>%
+  ggplot(aes(x = reorder(group, -mean_hz), y = mean_hz, fill = subgenus)) +
+  geom_bar(stat = "identity") +
+  xlab("Species") +
+  ylab("Mean heterozygosity") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  )
+
+ggsave("pdf_outputs/spp_mean_hz.pdf", width = 12, height = 8)
+
+```
+
+Looking more broadly at the subgenera:
+```{r read-subgenera}
+subgen <- read_csv("../data/subgenus_mean_hz.csv")
+```
+
+```{r}
+sgenus.plot <- subgen %>%
+  ggplot(aes(x = reorder(group, -mean_hz), y = mean_hz, fill = reorder(subgenus, -mean_hz))) +
+  geom_bar(stat = "identity") +
+  xlab("Species") +
+  ylab("Mean heterozygosity") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  ) 
+
+sgenus.plot +
+  labs(fill = "subgenus") +
+  theme(legend.position = c(0.85, 0.65)) 
+
+ggsave("pdf_outputs/spp_mean_hz_subgenus.pdf", width = 12, height = 8)
+
+```
+
+I also have the number of heterozygous loci per species...
+```{r}
+spp.id %>%
+  select(group, indiv.ID) %>%
+  unique() %>%
+  left_join(int_hz, by = "indiv.ID") %>%
+  arrange(desc(fract_hz)) %>%
+  group_by(group) %>%
+  select(group, indiv.ID, num_hz) %>%
+  mutate(mean_num_hz = mean(num_hz)) %>%
+  select(group, mean_num_hz) %>%
+  arrange(desc(mean_num_hz)) %>%
+  unique() %>%
+  ggplot(aes(x = reorder(group, -mean_num_hz), y = mean_num_hz)) +
+  geom_bar(stat = "identity") +
+  xlab("Species") +
+  ylab("Mean number of heterozygous loci") +
+  theme(
+  axis.text.x = element_text(angle = 90))
+
+```
+This shows the same (exact) data as the mean hz plot.
+
+
+Now, see if the tree software works...
+```{r}
+spp.id_loc$group <- as.character(spp.id_loc$group)
+spp.id_loc$pathString <- paste("Sebastes", spp.id_loc$group, sep = "/")
+tree <- as.Node(spp.id_loc[,])
+print(tree, pruneMethod = "dist", limit = 20)
+```
+
+Maybe I should generate some synthetic variables from this data related to heterozygosity?
+
+A little more googling and I found "ape"
+```{r}
+# load ape
+library(ape)
+library(phangorn)
+
+spp_data <- read.dna(spp.id.loc, format="interleaved")
+```
+
