@@ -81,6 +81,35 @@ and after filtering out indivs with fewer than 75 genotyped loci, we were left w
 `r length(unique(no_hi_missers$NMFS_DNA_ID))` individuals.  Those are the ones that
 we will run through rubias to identify to species.
 
+# add southern CA species obtained from La Jolla
+```{r}
+no_hi_missers %>%
+  filter(gtseq_run == "gtseq28") %>%
+  group_by(id) %>%
+  tally()
+```
+Six samples remain after removing those with too much missing data.
+Since there are only six, I can just look at the microhaplot interface to see which species are represented:
+s289 = S. ensifer
+s292 = moseri
+s294 = rufinanus
+s322 = helvomaculatus
+s339 = moseri
+s349 = ensifer
+
+What about before removing samples with too much missing data?
+
+```{r}
+geno_one_each %>%
+  filter(gtseq_run == "gtseq28") %>%
+  filter(id != "Ale") %>%
+  group_by(id) %>%
+  arrange(total_depth)
+```
+84 samples before eliminating those with too much missing data.
+
+But really, having so few representatives is problematic for a baseline. Consult with Carlos about requesting or re-extracting more material?
+
 ## Read in baseline genotypes and remove loci and individuals with too much missing data
 
 ```{r read-spp-genos}
@@ -101,13 +130,13 @@ spp.id_loc <- spp.id %>%
 
 
 # remove samples with missing data at more than 15 loci (per Hayley's workflow)
-spp.id_no_missers <- spp.id_loc %>%
-  group_by(indiv.ID) %>%
-  filter(sum(!is.na(allele)) >= (75*2))
+# spp.id_no_missers <- spp.id_loc %>%
+#   group_by(indiv.ID) %>%
+#   filter(sum(!is.na(allele)) >= (75*2))
 
 
 # add reference column to prepare data for rubias
-spp.id_loc1 <- spp.id_no_missers %>%
+spp.id_loc1 <- spp.id_loc %>%
   mutate(sample_type = "reference")
 
 x <- spp.id_loc1 %>%
@@ -163,8 +192,8 @@ two_col <- alle_idx2 %>%
 two_col
 
 # write this file to a thing that can be read-into other softwares
-#two_col %>%
-# write_csv("csv_outputs/genos_two_col.csv")
+two_col %>%
+ write_csv("csv_outputs/base_genos_two_col.csv")
 ```
 
 Okay, after some reading, it looks like I need to use `infer_mixture` in rubias.

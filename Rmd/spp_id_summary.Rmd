@@ -1,0 +1,265 @@
+---
+title: "rockfish spp id summary"
+output: html_notebook
+---
+
+I'm trying to summarize some of the species id work that Hayley Nuetzel did as I prep for writing the manuscript.
+
+Here, I have the label.txt files for all of the samples included in the "final" combined VCF file. I will summarize the number of samples per species included.
+
+```{r libraries-and-data}
+library(tidyverse)
+
+# create list of files
+#dsb:label_files dianabaetscher$ ls > ../files.txt
+
+# data
+list <- read.table("~/Desktop/sebastes_sppID/gtseq_seb_spp_id/files.txt", stringsAsFactors = FALSE, header = FALSE) %>%
+  tbl_df()
+list <- list %>%
+  rename(file = V1)
+dir <- "~/Desktop/sebastes_sppID/gtseq_seb_spp_id/label_files"
+
+setwd("~/Desktop/sebastes_sppID/gtseq_seb_spp_id/label_files")
+
+labels <- lapply(1:nrow(list), function(i) {
+  read_tsv(list$file[i], col_names = FALSE)
+}) %>%
+  bind_rows()
+
+vcf_samples <- labels %>%
+  rename(file = X1, sample = X2, species = X3) 
+
+vcf_samples %>%
+  group_by(species) %>%
+  tally() %>%
+  write_csv("vcf_samples_52spp.csv")
+  
+```
+
+
+```{r}
+test <- read_csv("csv_outputs/base_genos_two_col.csv")
+
+test %>%
+  filter(sample_type == "reference") %>%
+  filter(collection == "Ssimulator")
+
+```
+There are 1,535 samples in the Rubias baseline. Good. (Some of those ... 132 of them, actually, have > 15 missing loci.)
+
+Use long format data (not two-column) to generate estimates of variability and allele frequencies.
+OR
+read in MS Toolkit summary from Hayley. (starting there)
+NOTE: The number of samples included in the toolkit analyses is different than that in the VCF or baseline. Probably want to be consistent and could use calculations derived directly from the baseline data rather than going through MS toolkit.
+```{r toolkit-results}
+toolkit <- read_csv("~/Desktop/seb_spp_12112017_toolkit_summary.csv")
+  
+```
+```{r}
+
+toolkit$Population <- factor(toolkit$Population, levels = toolkit$Population[order(toolkit$Unbiased_Hz)])
+
+# plot the number of alleles vs the species
+toolkit_alleles <- toolkit %>%
+  ggplot(aes(x = Population, y = No_Alleles)) +
+  geom_point() +
+  theme_bw()
+
+toolkit_alleles +
+  theme(
+    axis.text.x = element_text(angle = 90)
+  ) +
+  xlab("Species") +
+  ylab("Number of alleles")
+```
+
+```{r}
+hz_plot <- toolkit %>%
+  ggplot(aes(x = Population, y = Unbiased_Hz)) +
+  geom_point() +
+  theme_bw()
+
+hz_plot +
+  theme(
+    axis.text.x = element_text(angle = 90)
+  ) +
+  xlab("Species") +
+  ylab("Unbiased heterozygosity")
+```
+
+What if I wanted to generate an estimate of overall allele frequencies per species from the baseline data?
+
+```{r}
+# just the data we want
+base_haps <- spp %>%
+  select(group, locus, indiv.ID, haplotype.1, haplotype.2)
+
+# test with just one species
+base_haps %>%
+  filter(group == "Satrovirens") %>%
+  filter(!is.na(haplotype.1)) %>%
+  group_by(locus, haplotype.1)
+
+# get the allele freqs
+# kg_ckmr_markers <- kg2 %>%
+#   filter(!is.na(Allele)) %>% # it is vital to filter out the NAs at this stage
+#   group_by(Chrom, Locus, Pos, Allele) %>%
+#   dplyr::summarise(counts = n()) %>%
+#   group_by(Locus, Pos) %>%
+#   mutate(Freq = counts / sum(counts)) %>%
+#   dplyr::select(-counts) %>%
+#   mutate(AlleIdx = 1,
+#          LocIdx = 1) %>%
+#   reindex_markers()
+```
+
+
+For self-assignment results:
+```{r rubias-results}
+# read in self-assignment results from 02-assign-mixture-w-rubias.Rmd
+ref_self <- readRDS("csv_outputs/baseline_self_assign.rds")
+
+# and take a quick look at those assignments
+ref_self %>%
+  #filter(inferred_repunit == repunit) %>%
+  filter(scaled_likelihood > 0.43) %>% # this threshold includes the most likely assignment for all 1,535 samples.
+  group_by(collection) %>%
+  tally() %>%
+  ggplot(aes(x = collection, y = n)) +
+  geom_bar(stat = "identity") +
+  theme(
+    axis.text.x = element_text(angle = 90)
+  )
+
+```
+
+What I want is the proportion of samples that were correctly assigned (at any level)
+```{r}
+# total proportion
+ref_self %>%
+  filter(inferred_collection == collection) %>%
+  filter(scaled_likelihood > 0.43) %>%
+  group_by(indiv) %>%
+  unique()
+```
+
+
+```{r barplot-assignment}
+ref_self %>%
+  #filter(inferred_repunit == repunit) %>%
+  filter(scaled_likelihood > 0.43) %>% 
+  filter(z_score > 3) # could make a note that the z_score is pretty tight (i.e. < 3)
+
+# proportions?
+collection <- ref_self %>% 
+  filter(scaled_likelihood > 0.43) %>% 
+  group_by(collection) %>%
+  tally()
+
+infer_col <- ref_self %>% 
+  filter(scaled_likelihood > 0.95) %>% 
+  group_by(inferred_collection) %>%
+  tally()
+
+pro_selfass <- collection %>%
+  left_join(infer_col, by = c("collection" = "inferred_collection")) %>%
+  mutate(prop = n.y / n.x) %>%
+  ggplot(aes(x = collection, y = prop)) +
+  geom_bar(stat = "identity") +
+  theme_bw()
+
+pro_selfass +
+  theme(
+    axis.text.x = element_text(angle = 90)
+  ) +
+  xlab("Species") +
+  ylab("Proportion correctly assigned")
+```
+This is okay, but what I really want is per-individual based (given that rosaceus should not be able to be > 1.0).
+
+
+```{r prop-ass-fig}
+# Make a figure that shows for which colonies gsi assignment is effective
+barplot <- ref_self %>%
+  filter(scaled_likelihood > 0.43) %>% 
+  group_by(repunit) %>%
+  mutate(result = ifelse(repunit == inferred_repunit, "yes", "no")) %>%
+  count(result) %>% # what proportion of each colony was correctly or incorrectly assigned?
+  mutate(prop = (n/sum(n))) %>%
+  ggplot(aes(x = repunit, y = prop, fill = result)) +
+  geom_bar(stat = "identity")
+
+bp2 <- barplot + guides(fill=guide_legend(title="Correct assignment")) +
+  xlab("Species") +
+  ylab("Proportion") +
+  theme_bw() +
+  scale_fill_manual(values = c("red", "dark blue"))
+
+
+bp2 +
+  theme(
+    axis.text.x = element_text(angle = 90)
+  )
+
+#ggsave("pdf_outputs/self_assignments_all_samples.pdf", height = 7, width = 10)
+  
+```
+
+That's good, but maybe too simple. Let's see if I can make a plot that also shows what proportion of each species was assigned to each other species.
+
+```{r prop-spp-ass}
+# Where does the incorrect proportion get assigned?
+colplot <- ref_self %>%
+  filter(scaled_likelihood > 0.95) %>%
+  group_by(repunit, inferred_repunit) %>%
+  mutate(result = ifelse(repunit == inferred_repunit, "yes", "no")) %>%
+  count(result) %>% # what proportion of each species was correctly or incorrectly assigned?
+  ungroup(inferred_repunit) %>%
+  group_by(repunit) %>%
+  mutate(prop = (n/sum(n))) %>%
+  ggplot(aes(x = repunit, y = prop, fill = inferred_repunit)) +
+  geom_bar(stat = "identity") +
+  theme_bw() 
+
+colplot + guides(fill=guide_legend(title="Assigned species")) +
+  xlab("Species") +
+  ylab("Proportion") +
+  theme(
+    axis.text.x = element_text(angle = 90)
+  )
+
+```
+Gosh. What a rainbow. That is not clear at all!
+
+
+```{r all-assign-prop}
+# Make a figure that shows for which colonies gsi assignment is effective
+bp_tot <- ref_self %>%
+  filter(scaled_likelihood > 0.95) %>% 
+  group_by(repunit) %>%
+  mutate(result = ifelse(repunit == inferred_repunit, "yes", "no")) %>%
+  count(result) %>% 
+  left_join(., collection, by = c("repunit" = "collection")) %>%
+  rename(tot_samples = n.y) %>%
+  rename(samples = n.x) %>%
+  mutate(prop = (samples / tot_samples)) %>%
+  ggplot(aes(x = repunit, y = prop, fill = result)) +
+  geom_bar(stat = "identity")
+
+bp_tot2 <- bp_tot + guides(fill=guide_legend(title="Correct assignment")) +
+  xlab("Species") +
+  ylab("Proportion") +
+  theme_bw() +
+  scale_fill_manual(values = c("red", "dark blue"))
+
+
+bp_tot2 +
+  theme(
+    axis.text.x = element_text(angle = 90)
+  )
+
+#ggsave("pdf_outputs/self_assignments_total.pdf", height = 7, width = 10)
+  
+```
+

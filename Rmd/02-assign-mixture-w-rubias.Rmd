@@ -34,6 +34,15 @@ batch_4969_ext$SAMPLE_ID <- as.character(batch_4969_ext$SAMPLE_ID)
 # bind those things together
 meta <- bind_rows(batch_4969, batch_4792, batch_4969_ext)
 ```
+
+Remove the wonky alewife samples from the sample sheet.
+```{r}
+rf_genos <- genos %>% 
+  filter(id != "Ale")
+  
+```
+
+
 ## Some initial filters
 
 ### Take highest read-depth call for multiply-genotyped DNA_IDs
@@ -57,7 +66,7 @@ tdepth <- function(a, d) {
   
 }
 # this takes the highest read-depth instance of each duplicately-genotyped individual.
-geno_one_each <- genos %>%
+geno_one_each <- rf_genos %>%
   group_by(NMFS_DNA_ID, locus, gtseq_run, id) %>%
   mutate(total_depth = tdepth(allele, depth)) %>%
   ungroup() %>%
@@ -83,15 +92,40 @@ keepers <- geno_one_each %>%
 ```
 What does the distribution of missing data look like?
 ```{r distribution-missing-data}
-keepers %>%
-  group_by(NMFS_DNA_ID) %>%
-  select(NMFS_DNA_ID, allele) %>%
-  tally(is.na(allele)) %>%
-  mutate(missing_loci = n/2) %>%
-  arrange(desc(missing_loci)) %>%
-  filter(missing_loci > 25)
+# ca_to_drop <- keepers %>%
+#   group_by(gtseq_run, id, NMFS_DNA_ID) %>%
+#   select(gtseq_run, id, NMFS_DNA_ID, allele) %>%
+#   tally(is.na(allele)) %>%
+#   mutate(missing_loci = n/2) %>%
+#   arrange(desc(missing_loci)) %>%
+#   filter(missing_loci > 25) %>%
+#   filter(gtseq_run == "gtseq28") # how many from the southern california samples? -73
 
 ```
+
+Okay, if there are 73 samples from the southern CA crew that drop out, how many are there total?
+```{r southern-ca-check}
+# sca_fish <- keepers %>%
+#   filter(gtseq_run == "gtseq28") %>%
+#   group_by(NMFS_DNA_ID, id) %>%
+#   tally() %>%
+#   arrange(id) %>% # 84 total fish and 73 that drop out.
+#   left_join(., ca_to_drop, by = "id")
+```
+ 
+```{r}
+# ca_spp <- read_csv("~/Desktop/sebastes_sppID/gtseq_ca_rockfish_samples.csv")
+# 
+# sca_fish %>%
+#   left_join(ca_spp) %>%
+#   filter(is.na(missing_loci)) %>%
+#   group_by(species) %>%
+#   tally()
+```
+The 11 remaining samples are: 2 helvomaculatus, 3 ensifer, 4 moseri, and 2 rufianus.
+
+
+[back to the non-southern CA samples]
 There are 28 total fish that are excluded because of missing > 25 loci. Of those 28, 11 are missing data at all 90 loci.
 
 There are 90 total loci, so we don't want to include samples with fewer than 25 loci with data.
@@ -160,6 +194,18 @@ alleles <- bind_rows(spp.id2, no_hi_missers2)
 
 alleles
 ```
+
+```{r}
+# how many of each species in the baseline (since it is different than the vcf)
+spp %>%
+  select(group, indiv.ID) %>%
+  unique() %>%
+  group_by(group) %>%
+  tally() %>%
+  write_csv("csv_outputs/SppID_baseline_1535_samples.csv")
+```
+
+
 We are going to do this by turning alleles into integers and spreading it and then getting it into the right format to run rubias.
 ```{r spread-genos}
 # first make integers of the alleles
@@ -209,6 +255,8 @@ ref_self %>%
   filter(inferred_repunit == repunit) %>%
   filter(scaled_likelihood > 0.95)
 
+# save this to use in the self-assignment summary in spp_id_summary.Rmd
+saveRDS(ref_self, file = "csv_outputs/baseline_self_assign.rds")
 ```
 
 Look at any samples that were assigned at lower than .95 in the baseline 

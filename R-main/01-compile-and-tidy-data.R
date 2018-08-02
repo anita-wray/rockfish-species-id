@@ -33,6 +33,7 @@ genos_long <- lapply(1:nrow(fdf), function(i) {
 
 
 # need to change the character GTseq to gtseq to match the sample sheet tibble
+# (this should really be changed to a function)
 v1 <- genos_long %>%
   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq58"), "gtseq58"))
 v2 <- v1 %>%
@@ -41,9 +42,10 @@ v3 <- v2 %>%
   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq60"), "gtseq60"))
 v4 <- v3 %>%
   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq62"), "gtseq62"))
-genos_long <- v4 %>%
+v5 <- v4 %>%
   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq63"), "gtseq63"))
-
+genos_long <- v5 %>%
+  mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq28"), "gtseq28"))
 
 
 # we go ahead and save it in data/processed, with xz compression
@@ -128,8 +130,32 @@ genos_long_explicit_NAs <- sample_sheets %>%
   left_join(., genos_long) %>%
   arrange(gtseq_run, id, locus, gene_copy)
 
-genos_long_explicit_NAs
 
+
+genos_long_explicit_NAs %>%
+  filter(id != "Ale")
+# there's an issue connecting the genotypes to the samplesheet for gtseq28.
+genos_long %>%
+  filter(gtseq_run == "gtseq28") %>%
+  group_by(id) %>%
+  arrange(desc(id)) %>%
+  tally() %>% tail()
+
+# rds file sample number s289-s382
+
+sample_sheets %>%
+  filter(gtseq_run == "gtseq28") %>%
+  group_by(id) %>%
+  arrange(id) %>%
+  tally() %>%
+  tail()
+
+# sample sheet sample number s1-s94
+
+# I need to go back to megabox to figure out how the sample numbers should actually match up!
+# recheck the re-numbering scheme used in the renaming step before flashing the reads.
+
+# because the sample numbers are not matching up between the sample sheet and the rds file.
 
 # and then save that
 saveRDS(genos_long_explicit_NAs, file = "data/processed/called_genos_na_explicit.rds", compress = "xz")

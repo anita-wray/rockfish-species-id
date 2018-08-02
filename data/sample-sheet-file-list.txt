@@ -1,4 +1,5 @@
 gtseq_run file
+gtseq28 gtseq28_sebastes_spid_alewife.xlsx
 gtseq58 gtseq58_sebastes_spid.xlsx
 gtseq59 gtseq59_sebastes_spid.xlsx
 gtseq60 gtseq60_sebastes_spid.xlsx

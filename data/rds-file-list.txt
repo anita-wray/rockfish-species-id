@@ -1,4 +1,5 @@
 gtseq_run file
+GTseq28 GTseq28_06092018.rds
 GTseq58 GTseq58_02232018.rds
 GTseq59 GTseq59_02262018.rds
 GTseq60 GTseq60_02262018.rds
