@@ -32,24 +32,6 @@ genos_long <- lapply(1:nrow(fdf), function(i) {
 }) %>%
   bind_rows()
 
-# # need to change the character GTseq to gtseq to match the sample sheet tibble
-# v1 <- genos_long %>%
-#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq21"), "gtseq21"))
-# v2 <- v1 %>%
-#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq43"), "gtseq43"))
-# v3 <- v2 %>%
-#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq44"), "gtseq44"))
-# v4 <- v3 %>%
-#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq45"), "gtseq45"))
-# v5 <- v4 %>%
-#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq47"), "gtseq47"))
-# v6 <- v5 %>%
-#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq49"), "gtseq49"))
-# v7 <- v6 %>%
-#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq50"), "gtseq50"))
-# genos_long <- v7 %>%
-#   mutate(gtseq_run = replace(gtseq_run, str_detect(gtseq_run, "GTseq54"), "gtseq54"))
-
 # we go ahead and save it in data/processed, with xz compression
 saveRDS(genos_long, file = "nsf_data/processed/called_genos.rds", compress = "xz")
 
@@ -58,8 +40,8 @@ saveRDS(genos_long, file = "nsf_data/processed/called_genos.rds", compress = "xz
 
 # Same drill here.  First we make a file that holds a data frame of file names:
 # dsb:sample_sheets dianabaetscher$ pwd
-# /Users/dianabaetscher/Desktop/NOAA_grad/git-repos/rockfish-species-id/nsf_data/sample_sheets
-# dsb:sample_sheets dianabaetscher$ ls -l | awk 'BEGIN {print "gtseq_run", "file"} NR > 1 {num = $NF; gsub(/GTseq/, "", num); gsub(/_.*$/, "", num);  print num, $NF}' > ../../nsf_data/sample-sheet-file-list.txt
+# /Users/dianabaetscher/Desktop/NOAA_grad/git-repos/nsf-kelp-rockfish-ckmr/data/sample_sheets
+# dsb:sample_sheets dianabaetscher$ ls -l | awk 'BEGIN {print "gtseq_run", "file"} NR > 1 {num = $NF; gsub(/GTseq/, "", num); gsub(/_.*$/, "", num);  print num, $NF}' > ../../../rockfish-species-id/nsf_data/sample-sheet-file-list.txt
 
 
 fdf <- read.table("nsf_data/sample-sheet-file-list.txt", stringsAsFactors = FALSE, header = TRUE) %>%
@@ -121,14 +103,14 @@ saveRDS(sample_sheets, "nsf_data/processed/sample-sheet-tibble.rds", compress = 
 # has the NMFS_DNA_ID on there
 genos_long_explicit_NAs <- sample_sheets %>%
   select(gtseq_run, id, NMFS_DNA_ID) %>%
-  unite(col = gid, sep = "_", gtseq_run, id, NMFS_DNA_ID) %>%
+  unite(col = gid, sep = "_", gtseq_run, id, NMFS_DNA_ID) %>% 
   select(gid) %>%
   unlist() %>%
   unname() %>%
   expand.grid(gid = ., locus = unique(genos_long$locus), gene_copy = 1:2, stringsAsFactors = FALSE) %>%
   tbl_df() %>% 
   separate(gid, into = c("gtseq_run", "id", "NMFS_DNA_ID"), convert = TRUE) %>%
-  left_join(., genos_long) %>%
+  left_join(., genos_long) %>% 
   arrange(gtseq_run, id, locus, gene_copy)
 
 

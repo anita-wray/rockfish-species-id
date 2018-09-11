@@ -9,13 +9,14 @@ library(tidyverse)
 library(CKMRsim)
 library(stringr)
 library(readxl)
+library(rubias)
 
 #meta <- readRDS("../data/processed/meta-data-tibble.rds") # not worrying about meta data right now...
-genos <- readRDS("../nsf_data/processed/called_genos_na_explicit.rds") #%>%
-  #filter(NMFS_DNA_ID %in% meta$NMFS_DNA_ID)  # drop those we don't have meta data for
+genos <- readRDS("../nsf_data/processed/called_genos_na_explicit.rds") %>%
+  filter(NMFS_DNA_ID != "Morin") # remove the data for Phil Morin
 samples <- readRDS("../nsf_data/processed/sample-sheet-tibble.rds") #%>%
   #filter(NMFS_DNA_ID %in% meta$NMFS_DNA_ID)
-
+  
 ```
 
 ## Some initial filters
@@ -94,7 +95,7 @@ spp.id_loc <- spp.id %>%
 # that should leave 90 loci 
 ```
 
-From the .csv output from microhaplot, we need to reform the data for rubias.
+From the .csv output from microhaplot, we need to reformat the data for rubias.
 ```{r format-reference-for-rubias}
 # add reference column to prepare data for rubias
 spp.id_loc1 <- spp.id_loc %>%
@@ -126,13 +127,16 @@ no_hi_missers3 <- no_hi_missers2[, c(5:7,1:4)]
 
 # combine both data sets into a single df
 alleles <- bind_rows(spp.id2, no_hi_missers3)
+
 ```
+
+
 
 Here we turn alleles into integers, spread the data frame, and then get it into the right format to run rubias:
 ```{r spread-genos}
 # first make integers of the alleles
 alle_idxs <- alleles %>% 
-  #dplyr::select(NMFS_DNA_ID, locus, gene_copy, allele) %>%
+  #select(NMFS_DNA_ID, locus, gene_copy, allele) %>%
   group_by(locus) %>%
   mutate(alleidx = as.integer(factor(allele, levels = unique(allele)))) %>%
   ungroup() %>%
@@ -183,6 +187,10 @@ grp_tally <- nsf_assignments[,-10] %>% # drop the missing loci column
   group_by(repunit) %>%
   tally()
   #write_csv("../nsf_data/spp_assignments_1-PofZ_zscore2.csv")
+
+grp_tally2 <- grp_tally %>%
+  arrange(desc(n)) %>%
+  filter(n > 1)
   
 ```
 The posterior means of group membership in each collection is in the PofZ column.
@@ -190,7 +198,7 @@ The posterior means of group membership in each collection is in the PofZ column
 Make a quick little plot to display the diversity of species in our NSF juvenile samples.
 ```{r quick-plot}
 # ordered by number of samples
-ggplot(grp_tally, (aes(x = reorder(repunit, -n), y = n))) + 
+ggplot(grp_tally2, (aes(x = reorder(repunit, -n), y = n))) + 
   geom_bar(stat = "identity") +
   theme_bw() +
   ylab("Samples") +
@@ -207,7 +215,7 @@ ggsave("pdf_outputs/nsf_juv_id.pdf", height = 7, width = 12)
 
 ```{r}
 # Now just the non-KGBC
-grp_tally %>%
+grp_tally2 %>%
   filter(repunit != "Satrovirens" & repunit != "Scarnatus" & repunit != "Schrysomelas" & repunit !="Scaurinus") %>%
   ggplot((aes(x = reorder(repunit, -n), y = n))) + 
   geom_bar(stat = "identity") +
@@ -224,7 +232,7 @@ grp_tally %>%
 ggsave("pdf_outputs/non_kgbc_juv_id.pdf", height = 7, width = 10)
 
 
-grp_tally %>%
+grp_tally2 %>%
   filter(repunit != "Satrovirens" & repunit != "Scarnatus" & repunit != "Schrysomelas" & repunit !="Scaurinus") %>% ungroup %>%
   arrange(desc(n))
 
@@ -247,5 +255,25 @@ kept_assignments <- mix_assign$indiv_posteriors %>%
 
 kept_assignments
 ```
+
+## Picking out the gopher, black-and-yellow, and copper rockfishes
+
+Interesting to see all the other species in there - mostly china and quillback. (And in reality, these non-target species only make up 1-2% of samples.)
+
+But what we actually want is a list of NMFS IDs for the fish assigned to gopher, black-and-yellow, and copper, which we can then use to select those fish from our NSF dataset, where we presumably have many more alleles for those species because the VCF used to call genotypes included hundreds of samples for each of those species.
+
+This dataset includes 12,741 samples.
+```{r}
+ mix_assign$indiv_posteriors %>%
+  group_by(indiv) %>%
+  filter(PofZ > 0.5) %>% # keep all potential assignments to check again with GSI SIM in the nsf workflow
+  filter(collection %in% c("Scarnatus", "Schrysomelas", "Scaurinus")) %>%
+  select(indiv) %>%
+  rename(NMFS_DNA_ID = indiv) %>%
+  write_csv("csv_outputs/nsf-GBYC-samples-ids.csv")
+
+  
+```
+That's 7,519 samples.
 
 
