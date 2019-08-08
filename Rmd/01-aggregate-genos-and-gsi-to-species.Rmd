@@ -451,4 +451,3 @@ The 4 samples that failed from R374 were for Helen Killeen.
 47 -27 = 20 samples that failed from the re-runs? Was that out of 108 total?
 
 And if we did re-run all of Brittany's fish from previous runs, is the majority of the missing data from the new samples? 
-

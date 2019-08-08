@@ -1,0 +1,220 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+species group specific PCAs to understand patterns of mis-assignment.
+
+```{r}
+library(tidyverse)
+library(adegenet)
+library("ape")
+library("pegas")
+library(RColorBrewer)
+library(wordcloud) # for non-overlapping labels
+
+```
+
+read in genepop data
+```{r}
+maliger <- read.genepop("../new_baseline_data/processed/maliger_caurinus_atrovirens.gen", ncode = 3)
+```
+
+make a basic PCA following the adegenet tutorial
+```{r}
+# Allele presence absence data are extracted and NAs replaced using tab:
+X <- tab(maliger, NA.method="mean")
+
+# make PCA
+mal.pca <- dudi.pca(X,scannf=FALSE,scale=FALSE)
+
+# plot PCA
+pdf("pdf_outputs/maliger_pca_v2.pdf", width = 7, height = 7)
+colorplot(mal.pca$li, mal.pca$li, transp=TRUE, cex=2, font=5, xlab="PC 1", ylab="PC 2")
+abline(v=0,h=0,col="grey", lty=2)
+textplot(mal.pca$li[,1], mal.pca$li[,2], words=pop(maliger), cex=.6, new=FALSE)
+dev.off()
+```
+
+Based on this it looks pretty clear that that maliger sample is mis-labeled.
+
+Can we look at the Fst value between maliger and caurinus?
+```{r}
+library(pegas)
+Fst(as.loci(maliger))
+
+matFst <- pairwise.fst(maliger)
+
+factor(maliger@pop) # atrovirens; caurinus; maliger
+
+matFst
+
+
+```
+
+
+
+## southern california species
+
+```{r data}
+
+socal <- read.genepop("../new_baseline_data/processed/southerncalif_spp.gen", ncode = 3)
+
+```
+make a basic PCA following the adegenet tutorial
+```{r}
+# Allele presence absence data are extracted and NAs replaced using tab:
+S <- tab(socal, NA.method="mean")
+
+# make PCA
+socal.pca <- dudi.pca(S,scannf=FALSE,scale=FALSE)
+
+# plot PCA
+pdf("pdf_outputs/socal_pca_v2.pdf", width = 10, height = 10)
+colorplot(socal.pca$li, socal.pca$li, transp=TRUE, cex=2, font=5, xlab="PC 1", ylab="PC 2")
+abline(v=0,h=0,col="grey", lty=2)
+textplot(socal.pca$li[,1], socal.pca$li[,2], words=pop(socal), cex=.6, new=FALSE)
+dev.off()
+```
+The resolution among the southern CA species is challenging - what is the Fst value between each group?
+
+```{r}
+# what are the factors?
+factor(socal@pop)
+
+# 9 levels: semicinctus; rosaceus; chlorostictus; ensifer; simulator; helvomaculatus; brevispinis; constellatus; paucispinis
+
+socal.fst <- pairwise.fst(socal)
+
+socal.fst
+```
+
+
+## kgbc and friends
+
+Read in the data to increase resolution for that cluster
+```{r}
+kgbc <- read.genepop("../new_baseline_data/processed/kgbc_plus.gen", ncode = 3)
+```
+
+make a basic PCA following the adegenet tutorial
+```{r}
+# Allele presence absence data are extracted and NAs replaced using tab:
+k <- tab(kgbc, NA.method="mean")
+
+# make PCA
+kgbc.pca <- dudi.pca(k,scannf=FALSE,scale=FALSE)
+
+# plot PCA
+pdf("pdf_outputs/kgbc_pca.pdf", width = 10, height = 10)
+colorplot(kgbc.pca$li, kgbc.pca$li, transp=TRUE, cex=2, font=5, xlab="PC 1", ylab="PC 2")
+abline(v=0,h=0,col="grey", lty=2)
+textplot(kgbc.pca$li[,1], kgbc.pca$li[,2], words=pop(kgbc), cex=.6, new=FALSE)
+dev.off()
+```
+
+## New PCA after removing the helvomaculatus, brevispinis, simulator, and revising the identity of the single maliger sample that is clearly misidentified and is actually caurinus
+
+```{r updated-pca}
+# Read in the data
+new.pca <- read.genepop("../new_baseline_data/processed/sebastes_no_helv_sim_brev.gen", ncode = 3)
+```
+
+make a basic PCA following the adegenet tutorial
+```{r}
+# Allele presence absence data are extracted and NAs replaced using tab:
+sebs <- tab(new.pca, NA.method="mean")
+
+# make PCA
+sebastes.pca <- dudi.pca(sebs,scannf=FALSE,scale=FALSE)
+
+# plot PCA
+#pdf("pdf_outputs/clean_sebastes_pca.pdf", width = 10, height = 10)
+colorplot(sebastes.pca$li, sebastes.pca$li, transp=TRUE, cex=2, font=5, xlab="PC 1", ylab="PC 2")
+abline(v=0,h=0,col="grey", lty=2)
+#dev.off()
+
+# rather than a colorplot, let's do a labeled PCA
+?s.class
+
+# version 1
+s.class(sebastes.pca$li, fac=pop(new.pca), col=funky(54))
+
+# version 2
+pdf("pdf_outputs/clean_sebastes_pca.pdf", width = 10, height = 10)
+s.class(sebastes.pca$li, fac=pop(new.pca),
+        col=transp(funky(54), 0.7),
+        axesel=FALSE, cstar = 0.8, cpoint = 3, clabel = 1)
+dev.off()
+```
+In this version of the PCA, hopkinsi is all stretched out. Are the z-scores for any of those samples weird?
+
+Bingo. Looking at `05-cleaner-baseline.Rmd` there are 5 hopkinsi samples with very low z-scores.
+
+## New PCA Fst summary stats
+Maybe to be used for ascertainment bias stuff?
+
+```{r}
+library("hierfstat")
+
+fstat(new.pca)
+```
+
+```{r}
+matFst <- pairwise.fst(new.pca,res.type="matrix")
+```
+(a bunch of markers with missing data for one or more populations were removed.)
+
+Make a tree?
+```{r}
+tree <- nj(matFst)
+
+pdf("pdf_outputs/test_tree.pdf", height = 10, width = 10)
+plot(tree, type="unr", tip.col=funky(nPop(new.pca)), font=1)
+annot <- round(tree$edge.length,2)
+edgelabels(annot[annot>0], which(annot>0), frame="n")
+add.scale.bar()
+dev.off()
+```
+
+Make a plot-thing?
+```{r}
+pdf("pdf_outputs/fst_table_paint.pdf", height = 10, width = 10)
+table.paint(matFst, col.labels=1:54)
+dev.off()
+```
+
+And then the boxplot
+```{r}
+pdf("pdf_outputs/fst_boxplot.pdf", height = 10, width = 10)
+temp <- matFst
+diag(temp) <- NA
+boxplot(temp, col=funky(nPop(new.pca)), las=3,
+        xlab="Species", ylab="Fst")
+dev.off()
+```
+I wonder how much of this is influenced by the number of loci that were removed?
+
+New test PCA
+```{r}
+# Allele presence absence data are extracted and NAs replaced using tab:
+sebs <- tab(new.pca, NA.method="mean")
+
+pca.seb <- dudi.pca(sebs, center=TRUE, scale=FALSE, nf = 20)
+
+# PCs 1 and 2
+s.class(pca.seb$li, fac=pop(new.pca),
+        xax=1, yax=2, col=transp(funky(54),.7),
+        axesel=FALSE, cstar=0, cpoint=3)
+add.scatter.eig(pca.seb$eig[1:50],3,2,3, ratio=.3)
+```
+Check out the first two PCs and then PCs 2 and 3
+
+```{r}
+# PCs 2 and 3
+s.class(pca.seb$li, fac=pop(new.pca),
+        xax=2, yax=3, col=transp(funky(54),.7),
+        axesel=FALSE, cstar=0, cpoint=3)
+add.scatter.eig(pca.seb$eig[1:50],3,2,3, ratio=.3)
+```
+

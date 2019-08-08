@@ -1,0 +1,504 @@
+---
+title: "PCA"
+output: html_notebook
+---
+Here is the original, unfiltered PCA code - useful for displaying outliers!
+I have also added code for PCA figures for the manuscript, including the inset with hopkinsi outliers and the carnatus/chrysomelas overlap.
+
+
+```{r load-libraries}
+library(tidyverse)
+library(adegenet)
+library("ape")
+library("pegas")
+library(RColorBrewer)
+library(wordcloud) # for non-overlapping labels
+
+# two_col2 <- read_csv("csv_outputs/sebastes_spp_baseline_two_col.csv")
+```
+
+## Make PCA for hopkinsi outliers
+
+Read in genepop file consisting of a subset of species combined from downsampled dataset and hopkinsi unfiltered data
+```{r read-genepop-hopkinsi}
+obj_hop <- read.genepop("../new_baseline_data/processed/hopkinsi_outliers_v2.gen", ncode = 3)
+
+# set population as a factor
+obj_hop@pop <- as.factor(obj_hop@pop)
+```
+
+make a basic PCA following the adegenet tutorial
+```{r hopkinsi-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+hopX <- tab(obj_hop, NA.method="mean")
+
+# make PCA
+hop_pca1 <- dudi.pca(hopX,scannf=FALSE,scale=FALSE)
+
+# colors
+cols2 <- colorRampPalette(c("midnightblue", "turquoise"))(14)
+
+# plot with factor labels
+pdf("pdf_outputs/hopkinsi_outliers_pca_v1.pdf", width = 10, height = 10)
+s.class(hop_pca1$li, fac=pop(obj_hop), cell = 0,
+        xax=1, yax=2, col=transp(cols2,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+
+## hopkinsi without outliers
+
+Read in updated genepop file
+```{r read-clean-hopkinsi}
+clean_hop <- read.genepop("../new_baseline_data/processed/hopkinsi_wo_outliers.gen", ncode = 3)
+
+# set population as a factor
+clean_hop@pop <- as.factor(clean_hop@pop)
+```
+
+Make the basic PCA plots
+```{r hopkinsi-clean-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+clhopX <- tab(clean_hop, NA.method="mean")
+
+# make PCA
+clhop_pca1 <- dudi.pca(clhopX,scannf=FALSE,scale=FALSE)
+
+# plot with factor labels
+pdf("pdf_outputs/hopkinsi_wo_outliers_pca.pdf", width = 10, height = 10)
+s.class(clhop_pca1$li, fac=pop(clean_hop), cell = 0,
+        xax=1, yax=2, col=transp(funky(14),.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+# Plot without labels
+pdf("pdf_outputs/hopkinsi_wo_outliers_no_labels.pdf", width = 10, height = 10)
+s.class(clhop_pca1$li, fac=pop(clean_hop), clabel = FALSE,
+        cell = 0, axesel=FALSE, cstar=0, cpoint=1, col=transp(funky(14),.8))
+dev.off()
+
+```
+
+## PCA demonstrating no distance between chrysomelas and carnatus
+
+Read in genepop file
+```{r genepop-chrysomelas-carnatus}
+
+gby <- read.genepop("../new_baseline_data/processed/carnatus_chrysomelas_downsampled_clean.gen", ncode = 3)
+
+# set population as a factor
+gby@pop <- as.factor(gby@pop)
+
+```
+
+Make PCAs with GBY and others...
+```{r hopkinsi-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+gbyX <- tab(gby, NA.method="mean")
+
+# make PCA
+gby_pca1 <- dudi.pca(gbyX,scannf=FALSE,scale=FALSE)
+
+# plot with factor labels
+pdf("pdf_outputs/carnatus_chrysomelas_pca.pdf", width = 10, height = 10)
+s.class(gby_pca1$li, fac=pop(gby), cell = 0,
+        xax=1, yax=2, col=transp(funky(10),.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+
+# only gopher/black-and-yellow
+Read in genepop file
+```{r genepop-chrysomelas-carnatus}
+
+gby1 <- read.genepop("../new_baseline_data/processed/only_carnatus_chrysomelas.gen", ncode = 3)
+
+# set population as a factor
+gby1@pop <- as.factor(gby1@pop)
+
+```
+
+Make PCAs with GBY
+```{r gby-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+gby1X <- tab(gby1, NA.method="mean")
+
+# make PCA
+gby1_pca1 <- dudi.pca(gby1X,scannf=FALSE,scale=FALSE)
+
+# plot with factor labels
+pdf("pdf_outputs/only_carnatus_chrysomelas_pca.pdf", width = 6, height = 6)
+s.class(gby1_pca1$li, fac=pop(gby1), cell = 0,
+        xax=1, yax=2, col=transp(c("dark blue", "dark green"),.8),
+        axesel=FALSE, cstar=0, cpoint=4)
+dev.off()
+
+```
+
+
+## atrovirens, carnatus, chrysomelas
+
+genepop file
+```{r}
+kgb <- read.genepop("../new_baseline_data/processed/atrovirens_carnatus_chrysomelas.gen", ncode = 3)
+# set population as a factor
+kgb@pop <- as.factor(kgb@pop)
+
+```
+
+Make PCAs with KGB
+```{r kgb-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+kgbX <- tab(kgb, NA.method="mean")
+
+# make PCA
+kgb_pca1 <- dudi.pca(kgbX,scannf=FALSE,scale=FALSE)
+
+# plot with factor labels
+pdf("pdf_outputs/atrovirens_carnatus_chrysomelas_pca.pdf", width = 6, height = 6)
+s.class(kgb_pca1$li, fac=pop(kgb), cell = 0,
+        xax=1, yax=2, col=transp(c("dark blue", "dark green", "orange"),.8),
+        axesel=FALSE, cstar=0, cpoint=4)
+dev.off()
+
+```
+
+## Entire downsampled dataset
+
+genepop file
+```{r dataset-genepop}
+dataset1 <- read.genepop("../new_baseline_data/processed/sebastes_downsampled_zscore_genepop3d.gen", ncode = 3)
+
+# set population as a factor
+dataset1@pop <- as.factor(dataset1@pop)
+
+```
+
+Make PCA
+```{r dataset-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+datasetX <- tab(dataset1, NA.method="mean")
+
+# make PCA
+dataset_pca1 <- dudi.pca(datasetX,scannf=FALSE,scale=FALSE)
+
+# colors
+mycol <- colorRampPalette(c("palegreen", "darkolivegreen", "darkslategrey", "darkgreen", "deepskyblue", "aquamarine4", "seagreen4", "cadetblue", "cyan", "darkblue", "midnightblue", "blue", "dodgerblue", "darkcyan", "darkslateblue", "slateblue", "steelblue4", "skyblue", "paleturquoise4", "brown", "royalblue", "purple4", "orange", "darkorange", "darkgoldenrod", "chocolate", "tan4", "saddlebrown", "sienna", "navajowhite4", "darkgray", "black"))(54)
+
+# plot with factor labels
+pdf("pdf_outputs/clean_dataset_pca_v3.pdf", width = 10, height = 10)
+s.class(dataset_pca1$li, fac=pop(dataset1), wt = rep(1, length(pop(dataset1))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(mycol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+## PCA analysis with 54 eigenvectors (for Chris)
+
+```{r}
+data(dataset1)
+x.data <- tab(dataset1, freq=TRUE, NA.method="mean")
+pca.data <- dudi.pca(x.data, center=TRUE, scale=FALSE, scannf = FALSE, nf = 54)
+
+```
+
+
+```{r}
+pca.data$eig
+```
+So there are actually 986 eigenvalues, not just 54 (the number of species).
+This is because the eigenvalues represent the amount of genetic diversity - measured by the multivariate method - represented by each principal component. 
+The amount of variance in the 986 PC is pretty small though (10e-07).
+
+Make a plot that includes the eigenvalues
+```{r}
+s.class(pca.data$li, fac=pop(dataset1),
+        col=transp(funky(54),.6),
+        axesel=FALSE, cstar=0, cpoint=3)
+add.scatter.eig(pca.data$eig[1:54],3,1,2, ratio=.3)
+```
+
+
+
+###
+
+```{r}
+# colors
+mycol <- colorRampPalette(c("orange", "darkcyan", "blue", "darkblue", "purple", "red"))(54)
+
+# plot with factor labels
+pdf("pdf_outputs/clean_dataset_pca_v4.pdf", width = 10, height = 10)
+s.class(dataset_pca1$li, fac=pop(dataset1), wt = rep(1, length(pop(dataset1))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(mycol, .9),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+```
+
+
+## PCA in sections
+
+It's busy and hard to look at the full dataset in a pca... I'm going to try to break it up into pieces to provide better resolution for the groups that are clustered on top of each other.
+
+read in genepop file
+```{r atrovirens-group-genepop}
+atrovirens1 <- read.genepop("../new_baseline_data/processed/maliger_etc_downsampled.gen", ncode = 3)
+
+# set population as a factor
+atrovirens1@pop <- as.factor(atrovirens1@pop)
+```
+
+Make PCA
+```{r atrovirens-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+atrovirensX <- tab(atrovirens1, NA.method="mean")
+
+# make PCA
+atrovirens_pca1 <- dudi.pca(atrovirensX,scannf=FALSE,scale=FALSE)
+
+# colors
+grpcols <- colorRampPalette(c("darkblue", "darkgreen", "orange", "brown", "black"))(5)
+
+# plot with factor labels
+pdf("pdf_outputs/carnatus_chrysomelas_grp_pca_v2.pdf", width = 5, height = 6)
+s.class(atrovirens_pca1$li, fac=pop(atrovirens1), cell = 0,
+        xax=1, yax=2, col=transp(grpcols,.8),
+        axesel=FALSE, cstar=0, cpoint=2)
+dev.off()
+
+```
+
+## The center subset, including hopkinsi, borealis, ovalis, etc.
+
+read in genepop file
+```{r}
+middle1 <- read.genepop("../new_baseline_data/processed/middle_grp_subset.gen", ncode = 3)
+
+# set population as a factor
+middle1@pop <- as.factor(middle1@pop)
+
+```
+
+Make PCA
+```{r}
+# Allele presence absence data are extracted and NAs replaced using tab:
+middleX <- tab(middle1, NA.method="mean")
+
+# make PCA
+middle_pca1 <- dudi.pca(middleX,scannf=FALSE,scale=FALSE)
+
+# plot with factor labels
+pdf("pdf_outputs/middle_grp_pca.pdf", width = 6, height = 6)
+s.class(middle_pca1$li, fac=pop(middle1), cell = 0,
+        xax=1, yax=2, col=transp(funky(7),.8),
+        axesel=FALSE, cstar=0, cpoint=2)
+dev.off()
+
+```
+
+## 
+
+
+
+## Experimenting with using ggplot for my PCAs rather than base R
+
+Do I have to use base R for my figure?
+Apparently not! 
+Which means I can test out the ggrepel package
+```{r}
+library(ggrepel)
+```
+
+struggggling
+```{r}
+ggplot(atrovirens_pca1$li) +
+  geom_point(aes(x = Axis1, y = Axis2, color = pop(atrovirens1)), size = 2, alpha = 0.8) +
+  geom_label(aes(x = Axis1, y = Axis2, label = factor(pop(atrovirens1))), stat = "identity") +
+  theme_bw() +
+  xlab("PC 1") +
+  ylab("PC 2") +
+  guides(color = guide_legend(title="Species"))
+
+atrovirens_pca1
+pop(atrovirens1)
+```
+
+
+
+
+
+## Original, unfiltered data
+
+Read in genepop format (converted from two-column using the pipeline) as a genind object for use with adegenet.
+```{r}
+obj1 <- read.genepop("../new_baseline_data/processed/sebastes_updated_genepop.gen", ncode = 3)
+
+```
+
+```{r}
+# genepop format removes all numbers from sample names
+# we want to put them back.
+
+# grab the individual ids from our 2-column data frame
+# ids <- two_col2$indiv
+# indNames(obj1) <- ids # name the indNames component of the genind object
+# 
+# # take a look
+# head(indNames(obj1),10) 
+
+# set population as a factor
+obj1@pop <- as.factor(obj1@pop)
+
+```
+
+Make a summary barplot:
+```{r}
+# op <- par(mar = c(10,4,4,2) + 0.1)
+# pdf("pdf_outputs/sample_barplot.pdf", height = 8, width = 8)
+# barplot(table(pop(obj1)), col=funky(57), las=2,
+#         xlab="", ylab="Sample size", cex.axis = 0.5)
+# par(op)
+# title(xlab="Species", line=5, cex.lab=1.2)
+# dev.off()
+```
+
+summarize the alleles per locus
+```{r}
+temp <- summary(obj1)
+
+# barplot(table((obj1), col=funky(90), las=3,
+#         xlab="locus", ylab="number of alleles"))
+
+```
+
+
+make a basic PCA following the adegenet tutorial
+```{r}
+# Allele presence absence data are extracted and NAs replaced using tab:
+X <- tab(obj1, NA.method="mean")
+
+# make PCA
+pca1 <- dudi.pca(X,scannf=FALSE,scale=FALSE)
+#pca2 <- dudi.pca(X,cent=FALSE,scale=FALSE,scannf=FALSE,nf=3)
+
+# set rownames for plot?
+indNames(obj1) <- obj1@pop
+
+# plot PCA with wordcloud-esque labels (hard to read)
+# pdf("pdf_outputs/sebastes_pca_labels_v2.pdf", width = 10, height = 10)
+# colorplot(pca1$li, pca1$li, transp=TRUE, cex=1, font=2, xlab="PC 1", ylab="PC 2")
+# abline(v=0,h=0,col="grey", lty=2)
+# textplot(pca1$li[,1], pca1$li[,2], words=pop(obj1), cex=0.5, new=FALSE)
+# dev.off()
+```
+
+```{r}
+# plot with factor labels
+pdf("pdf_outputs/sebastes_factor_label_v2.pdf", width = 10, height = 10)
+s.class(pca1$li, fac=pop(obj1),
+        xax=1, yax=2, col=transp(funky(58),.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+# textplot(pca1$li[,1], pca1$li[,2], words = fac(pop(obj1)), cex = 0.5, show.lines = TRUE)
+dev.off()
+
+# how many samples per species?
+summary(factor(obj1@pop))
+
+# pca without labels
+pdf("pdf_outputs/sebastes_pca_no_labels_v2.pdf", width = 10, height = 10)
+s.class(pca1$li, fac=pop(obj1), clabel = FALSE,
+        axesel=FALSE, cstar=1, cpoint=1, col=transp(funky(58),.9))
+dev.off()
+
+# another version
+
+s.label(pca1$li, cpoint = 1, boxes = FALSE, add.plot = FALSE)
+
+s.label(pca1$li, ppoints.col = "red", plabels = list(box = list(draw = FALSE), optim = TRUE))
+
+s.label(pca1$li, ppoints.col= transp(funky(58), .7), plabels = list(box = list(draw = FALSE), optim = TRUE))
+
+?s.label()
+
+```
+
+
+
+```{r}
+loadingplot(pca1$c1^2)
+```
+
+## other related analyses
+```{r}
+library("hierfstat")
+```
+```{r}
+fstat(obj1)
+```
+
+Look at pairwise Fst between groups
+```{r}
+obj1.matFst <- pairwise.fst(obj1,res.type="matrix")
+```
+
+And then build a tree from those data
+```{r}
+obj1.tree <- nj(obj1.matFst)
+plot(obj1.tree, type="unr", tip.col=funky(nPop(obj1)), font=2)
+annot <- round(obj1.tree$edge.length,2)
+edgelabels(annot[annot>0], which(annot>0), frame="n")
+add.scale.bar()
+```
+
+
+
+
+
+
+
+
+
+## Attempt to change a data frame into a genind object
+
+```{r}
+# test1 <- two_col2 %>% head %>%
+#   select(-repunit, -sample_type) %>%
+#   select(1:8) %>%
+#   unite(loc1, 3:4, sep = ",") %>%
+#   unite(loc2, 4:5, sep = ",") %>%
+#   unite(loc3, 5:6, sep = ",")
+#   
+```
+
+
+
+```{r}
+# convert individuals to rownames
+# ids <- test1$indiv
+# test1$collection <- as.factor(test1$collection)
+# 
+# test2 <- test1 %>%
+#   select(-collection, -indiv)
+# 
+# df2genind(test2, ploidy = 2, sep = ",", ind.names = ids, pop = test1$collection )
+```
+
+```{r}
+# df <- two_col2 %>%
+#   select(-repunit, -sample_type, -indiv, -collection) %>%
+#   unite(loc1, 3:4, sep = ",") %>%
+#   unite(loc2, 4:5, sep = ",") %>%
+#   unite(loc3, 5:6, sep = ",")
+# 
+# for (i in 1:90) {
+#   unite(loc{i}, {i}:{i+1}, sep = ",")
+#   
+# }
+# 
+# lst = lapply(seq(ncol(df)), function(i) {
+#     unite_(df, paste0('loc', i), paste0(i:(i+1)), sep = ",")
+# }) 
+
+  
+```

@@ -1,0 +1,309 @@
+---
+title: "looking for structure in high heterozygosity species"
+output: html_notebook
+---
+
+One comment at my committee meeting was that some of the species with higher than expected heterozygosity might have substructure, and we can test for that in our data.
+
+The species that came to the attention of the group were:
+1. melanostictus
+2. ensifer
+3. rosaceus
+
+```{r}
+library(tidyverse)
+library(rubias)
+library(adegenet)
+library(feather)
+
+
+# data
+
+# genotypes
+genos <- readRDS("../new_baseline_data/processed/called_genos_na_explicit.rds") %>% 
+  filter(!str_detect(NMFS_DNA_ID, "N")) # remove Lorne's ambiguous yelloweye samples
+
+# filtered 2-col data
+filt_data <- read_csv("csv_outputs/clean_filtered_997_dataset.csv")
+
+# genepop format with outliers
+outliers <- read.genepop("../new_baseline_data/processed/sebastes_melanostictus_ensifer_rosaceus.gen", ncode = 3)
+
+# set population as a factor
+outliers@pop <- as.factor(outliers@pop)
+
+```
+
+Make PCA
+```{r dataset-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+outliersX <- tab(outliers, NA.method="mean")
+
+# make PCA
+outliers_pca1 <- dudi.pca(outliersX,scannf=FALSE,scale=FALSE)
+
+# colors
+mycol <- colorRampPalette(c("palegreen", "darkolivegreen", "darkslategrey", "darkgreen", "deepskyblue", "aquamarine4", "seagreen4", "cadetblue", "cyan", "darkblue", "midnightblue", "blue", "dodgerblue", "darkcyan", "darkslateblue", "slateblue", "steelblue4", "skyblue", "paleturquoise4", "brown", "royalblue", "purple4", "orange", "darkorange", "darkgoldenrod", "chocolate", "tan4", "saddlebrown", "sienna", "navajowhite4", "darkgray", "black"))(54)
+
+# plot with factor labels
+pdf("pdf_outputs/melanostictus_etc_pca.pdf", width = 10, height = 10)
+s.class(outliers_pca1$li, fac=pop(outliers), wt = rep(1, length(pop(outliers))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(mycol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+Huh. Only rosaceus looks questionable. Probably need to actually do the analysis in STRUCTURE.
+
+Grab genotypes for the outliers in 2-column format for structure:
+```{r}
+filt_data %>%
+  filter(collection %in% c("melanostictus", "rosaceus", "chlorostictus", "ensifer")) %>%
+  select(-sample_type, -repunit) %>%
+  write_csv("csv_outputs/filtered_data_2col_outliers.csv")
+
+```
+
+## Look at hopkinsi outliers for read depth
+
+Eric/Carlos had the thought that maybe the hopkinsi samples are contaminated.
+Let's look at the genotype data to see if there's a signature of unexpected read depths there:
+
+```{r}
+# just the samples of interest
+hopis <- c("R010376", "R010374", "R010377", "R010375", "R010372", "R010370", "R010371", "R010373")
+hopkis <- as.tibble(hopis) %>%
+  rename(NMFS_DNA_ID = value)
+
+hopkis %>% 
+  left_join(., genos) %>%
+  select(NMFS_DNA_ID, gtseq_run, id) %>%
+  unique()
+```
+
+Some of those allele balances look suspicious.
+I'll poke into the unfiltered data to see about additional alleles.
+
+The assumption with contaminated samples is that they will likely have at least two characteristics:
+1. intermediate allele balance (0.4-0.8) for the second allele in at least some loci (generating heterozygotes from what may have been uncontaminated homozygotes)
+2. high read depth at a third allele in at least some loci (corresponding to an intermediate allele balance at this third-ranked allele)
+
+Here we look at the unfiltered genotype data for each of the eight samples to determine if their outlier z-statistic was likely caused by contamination.
+
+ID: R010374	gtseq_run: 11	s825
+```{r}
+test <- read_feather("../new_baseline_data/feather_files/gtseq11_sebastes_spp_10292018.feather") 
+
+test %>%
+  filter(id == "s825") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+
+```
+The locus tag_id_1558 looks sketchy, as does tag_id_1598, 1604, 1613, 1652.
+Maybe contamination IS the issue.
+
+
+Take a look at another one:
+s849
+```{r}
+test %>%
+  filter(id == "s849") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+
+
+```
+
+
+s861
+```{r}
+test %>%
+  filter(id == "s861") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+
+```
+
+s837
+```{r}
+test %>%
+  filter(id == "s837") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+
+```
+
+s801
+```{r}
+test %>%
+  filter(id == "s801") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+
+```
+
+s777
+```{r}
+test %>%
+  filter(id == "s777") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+```
+
+s789
+```{r}
+test %>%
+  filter(id == "s789") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+```
+
+
+s813
+```{r}
+test %>%
+  filter(id == "s813") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+```
+
+Yeah, it looks like all 8 of those samples have tell-tale signs of contamination - very high read depths for the 3 and 4 alleles and intermediate allele balance. Many of the #2 ranked alleles also have intermediate allele balance.
+
+
+
+## Meta data
+
+Remind myself what the meta data for these fish showed:
+```{r}
+hopkis %>%
+  left_join(., meta)
+```
+That's right these are the weird "ADULT" larvae.
+
+## Rosaceus
+
+Four of the rosaceus samples also looked odd based on the structure plot - like maybe they are also contaminated, or at least have mixed ancestry.
+
+R016831
+R016832
+R016833
+R016835
+
+```{r}
+genos %>%
+  filter(NMFS_DNA_ID == "R016831")
+
+```
+This one is gtseq run 55, s560
+
+```{r}
+rosy <- read_feather("../new_baseline_data/feather_files/gtseq55_sebastes_spp_10292018.feather") 
+
+rosy %>%
+  filter(id == "s560") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+
+```
+That one doesn't look contaminated. The only locus with a third allele at significant depth is one that we know is problematic and remove.
+
+Take a look at another one:
+R016832
+```{r}
+genos %>% 
+  filter(NMFS_DNA_ID == "R016832")
+```
+
+gtseq_run 55, s572
+```{r}
+rosy %>%
+  filter(id == "s572") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+  
+```
+
+None.
+
+Check one more:
+R016833
+```{r}
+genos %>%
+  filter(NMFS_DNA_ID == "R016833")
+```
+
+gtseq_run 55, s489
+```{r}
+rosy %>%
+  filter(id == "s489") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+
+```
+Not there either.
+
+Finally, R016835:
+```{r}
+genos %>%
+  filter(NMFS_DNA_ID == "R016835")
+```
+
+gtseq_run55, s513
+```{r}
+rosy %>%
+  filter(id == "s513") %>%
+  group_by(locus) %>%
+  select(locus, depth, rank, allele.balance) %>%
+  arrange(locus, rank) %>%
+  filter(rank > 2) %>%
+  filter(depth > 8) %>%
+  filter(allele.balance > 0.4 & allele.balance < 0.9)
+```
+Alright, those four samples are not contaminated.
+
+

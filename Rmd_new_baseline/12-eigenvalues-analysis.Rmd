@@ -1,0 +1,208 @@
+---
+title: "Eigenvalue analysis for Chris"
+output: html_notebook
+---
+
+In my committee meeting, Chris questioned whether the gopher/black-and-yellow cluster wouldn't separate more solidly by with two of the other principal components in the analysis. This is a fair point, and one that I should demonstrate empirically.
+
+```{r load-libraries}
+library(tidyverse)
+library(adegenet)
+library("ape")
+library("pegas")
+library(RColorBrewer)
+
+```
+
+## PCA trying to separate chrysomelas and carnatus
+
+Read in genepop file for just gopher and black-and-yellow
+```{r genepop-chrysomelas-carnatus}
+gby1 <- read.genepop("../new_baseline_data/processed/only_carnatus_chrysomelas.gen", ncode = 3)
+
+# set population as a factor
+gby1@pop <- as.factor(gby1@pop)
+```
+
+PCA with just GBY using adegenet
+```{r hopkinsi-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+gby1X <- tab(gby1, NA.method="mean")
+
+# make PCA
+gby1_pca1 <- dudi.pca(gby1X, center = TRUE, scannf = FALSE, scale=FALSE, nf = 100)
+
+# plot with factor labels
+#pdf("pdf_outputs/carnatus_chrysomelas_pca.pdf", width = 10, height = 10)
+s.class(gby1_pca1$li, fac=pop(gby1), cell = 0,
+        xax=1, yax=2, col=transp(c("dark blue", "dark green"),.8),
+        axesel=FALSE, cstar=0, cpoint=4)
+add.scatter.eig(gby1_pca1$eig[1:63],3,1,2, ratio=.3)
+#dev.off()
+
+```
+
+```{r}
+gby1_pca1$eig
+```
+For these two species, there are 63 eigenvalues
+
+Using the adegenet manual to describe the PC variance in terms of percentage of the total variance:
+```{r}
+eig.perc <- 100*gby1_pca1$eig/sum(gby1_pca1$eig)
+
+sum(eig.perc[1:30])
+```
+
+```{r}
+pc1 <- gby1_pca1$li[,1]
+var(pc1)
+```
+
+
+Let's see if plotting any of the other PCs will separate gopher/black-and-yellow.
+```{r}
+# PC 2 and 3
+s.class(gby1_pca1$li, fac=pop(gby1), cell = 0,
+        xax=2, yax=3, col=transp(c("dark blue", "dark green"),.8),
+        axesel=FALSE, cstar=0, cpoint=4)
+add.scatter.eig(gby1_pca1$eig[1:63],3,2,3, ratio=.3)
+
+```
+
+
+Here I'll cycle over the sets of sequential PCs, e.g. PC1 and PC2, PC2 and PC3, etc.
+```{r}
+pdf("pdf_outputs/carnatus_chrysomelas_pca_tile.pdf", width = 10, height = 10)
+
+par(mfrow = c(3,3))
+# name a vector for the first 20 PCs
+a <- 1:10
+for (i in seq_along(a)) {
+s.class(gby1_pca1$li, fac=pop(gby1), cell = 0,
+        xax=a[i], yax=a[i+1], col=transp(c("dark blue", "dark green"),.8),
+        axesel=FALSE, cstar=0, cpoint=4)
+add.scatter.eig(gby1_pca1$eig[1:63],3,a[i],a[i+1], ratio=.3)
+}
+dev.off()
+```
+
+What about comparing PC1 with each other PC (for the first 20)?
+```{r pc1}
+# using PC1 as the x axis in each case
+par(mfrow = c(3,3))
+for (i in seq_along(a)) {
+s.class(gby1_pca1$li, fac=pop(gby1), cell = 0,
+        xax=1, yax=a[i+1], col=transp(c("dark blue", "dark green"),.8),
+        axesel=FALSE, cstar=0, cpoint=4)
+add.scatter.eig(gby1_pca1$eig[1:63],3,1,a[i+1], ratio=.3)
+}
+```
+
+# Using PC 2 as the x-axis in each plot
+```{r pc2}
+par(mfrow = c(3,3))
+a <- 3:11
+for (i in seq_along(a)) {
+s.class(gby1_pca1$li, fac=pop(gby1), cell = 0,
+        xax=2, yax=a[i], col=transp(c("dark blue", "dark green"),.8),
+        axesel=FALSE, cstar=0, cpoint=4)
+add.scatter.eig(gby1_pca1$eig[1:63],3,1,a[i+1], ratio=.3)
+}
+
+
+```
+
+## Mean of the values of each PC for gopher/black-and-yellow
+
+Another way to look at these data is by calculating the mean of the values of each PC for all the gopher individuals and all of the black-and-yellow individuals.
+
+And then plot those means on the y-axis, with the x-axis showing which principal component it is.  I suspect that this will show some separation in the means from the first principal component, and very little after that for any of the others.
+
+```{r species-order}
+gby1$pop
+```
+There we can see that samples 1-32 are chrysomelas and 33-64 are carnatus.
+
+What I want is to take the mean of each column for the first 32 samples and then the mean of each column for the 33-64 samples.
+
+```{r}
+# turn df into a tibble,
+# sort by the species groups, and then 
+# calculate the mean
+gby_pc_means <- rownames_to_column(gby1_pca1$li, var = "id") %>%
+  mutate(species = ifelse(id < 33, "chrysomelas", "carnatus")) %>%
+  group_by(species) %>%
+  summarise_all(funs(mean))
+
+gby_pc_means
+```
+
+So then I want to plot those means on the y-axis and have PC on the x-axis.
+
+```{r}
+mean_df <- gby_pc_means %>%
+  gather(pc, mean, 3:65) %>%
+  select(-id) 
+
+# rename the Axis to just the PC number
+mean_df$pc <- str_replace(mean_df$pc, "Axis", "")
+mean_df$pc <- as.numeric(mean_df$pc)
+```
+
+
+
+```{r gby-means-plot}
+mean_plot <- mean_df %>%
+  ggplot() +
+  geom_point(aes(x = pc, y = mean, color = species)) +
+  theme_bw() +
+  scale_color_manual(values = c("dark green", "dark blue"))
+
+mean_plot +
+  scale_x_continuous(name = "principal component", breaks=seq(0,65,10), labels=seq(0,65,10))
+
+ggsave("pdf_outputs/gby_pc_means.pdf")
+```
+
+Based on the data, PC1 x PC4 might be the best bet?
+```{r}
+pdf("pdf_outputs/carnatus_chrysomelas_pc1xpc4.pdf", width = 10, height = 10)
+s.class(gby1_pca1$li, fac=pop(gby1), cell = 0,
+        xax=1, yax=4, col=transp(c("dark blue", "dark green"),.8),
+        axesel=FALSE, cstar=0, cpoint=4)
+add.scatter.eig(gby1_pca1$eig[1:63],3,1,4, ratio=.3)
+dev.off()
+
+```
+
+## Fst
+
+```{r}
+library(hierfstat)
+```
+
+```{r}
+fst_gby <- pairwise.fst(gby1, pop = gby1$pop, res.type = c("matrix"))
+
+fst_gby
+```
+
+This isn't properly accounting for the two species. Not sure why not.
+```{r}
+?basic.stats
+gby_stats <- basic.stats(gby1, diploid = TRUE)
+
+gby_per_loc <- rownames_to_column(gby_stats$perloc) %>%
+  rename(locus = rowname)
+
+gby_per_loc %>%
+  arrange(desc(Fst)) %>%
+  write_csv("csv_outputs/GBY_per_locus_stats.csv")
+
+gby_stats$pop.freq$tag_id_179
+  #write_csv("csv_outputs/gby_pop_freq.csv")
+```
+
+
+

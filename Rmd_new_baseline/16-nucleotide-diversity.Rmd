@@ -1,0 +1,285 @@
+---
+title: "Nucleotide diversity"
+output: html_notebook
+---
+
+Rather than using heterozygosity for a measure of the variability of the loci across species, we will use nucleotide diversity because it is less sensitive to differences in sample size - an issue that is present in our current species ID dataset.
+
+I generated files of per-site nucleotide diversity using vcftools from the gzipped vcfs created using filtered bamlists with only high quality samples, and consistent with the final data included in the manuscript/dissertation chapter.
+
+Inital data-wrangling:
+
+I want to read in the data files from the sites_pi directory in a similar manner to that used for the rds files and sample sheets.
+
+Load libraries and read in data files
+```{r}
+library(tidyverse)
+```
+
+
+```{sh, eval = FALSE}
+nucleotide_diversity_satrovirens.sites.pi | awk -F'[_.]' '{print $3}'
+
+```
+
+```{r}
+files <- read_tsv("../data/sites-pi-file-list.txt") %>%
+  rename(file = `species file`)
+spp <- read_tsv("../data/sites-pi-species-list.txt", col_names = FALSE) %>%
+  rename(species = X1)
+
+sites_pi_list <- bind_cols(spp, files)
+
+sites_pi_list %>%
+  write_tsv("../data/sites-pi-list.txt")
+```
+
+
+
+
+```{r}
+# get the names of the files
+fdf <- read.table("../data/sites-pi-list.txt", stringsAsFactors = FALSE, header = TRUE) %>%
+  tbl_df()
+dir <- "../data/sites_pi"
+
+
+# cycle over them, read them and add the gtseq_run column on each.
+# at the end, bind them together.
+spp_sites_pi <- lapply(1:nrow(fdf), function(i) {
+  message("Working on ", fdf$file[i])
+    read_tsv(file.path(dir, fdf$file[i])) %>%
+    mutate(species = fdf$species[i]) %>%
+    select(species, everything())
+}) %>%
+  bind_rows()
+
+# save that for ease
+spp_sites_pi %>%
+  write_rds("csv_outputs/spp_sites_pi.rds")
+```
+
+# From that combined data file, I need to figure out how to properly calculate pi
+```{r}
+spp_sites_pi %>%
+  group_by(species) %>%
+  summarise(mean(PI)) %>%
+  rename(pi = `mean(PI)`) %>%
+  arrange(desc(pi))
+```
+
+It seems weird that atrovirens wouldn't have the highest nucleotide diversity...
+I need to dig into this calculation a bit more.
+
+https://github.com/alexharkess/PBIO_6550/wiki/Lab-9-:-Population-genomics
+
+I wonder if part of the issue is averaging over many more sites in the atrovirens and other pteropodus groups?
+
+
+```{r}
+spp_sites_pi %>%
+  filter(species == "atrovirens")
+```
+
+```{r}
+spp_sites_pi %>%
+  filter(species == "goodei") #%>%
+  #filter(PI > 0)
+```
+
+
+The calculation needs to account for the variant and invariant sites
+```{r}
+spp_sites_pi %>%
+  group_by(species) %>%
+  summarise(mean(PI)) %>%
+  rename(pi = `mean(PI)`) %>%
+  arrange(desc(pi))
+
+```
+
+
+Okay, the deal is that according to Nei and Li (1979), nucleotide diversity accounts for the number of sequences in the sample and might use the output from vcftools as one of the variables (but I need more info about what vcftools is calculating).
+
+
+According to Yu et al. (2004), pi is defined as the number of nucleotide differences per site between two randomly chosen sequences in a population.
+
+
+```{r}
+spp_sites_pi %>%
+  write_rds("../data/spp_sites_pi.rds")
+```
+
+## Test data
+
+So I think what I actually want to do is calculate the per-site nucleotide diversity across the entire set of amplicons as a "window" using the vcftools --window-pi function.
+
+I did that like this:
+```{sh, eval=FALSE}
+dsb:data dianabaetscher$ vcftools --gzvcf rockfish6_aug2018.vcf.gz --window-pi 500 --out rock_test_window
+
+VCFtools - 0.1.17
+(C) Adam Auton and Anthony Marcketta 2009
+
+Parameters as interpreted:
+	--gzvcf rockfish6_aug2018.vcf.gz
+	--out rock_test_window
+	--window-pi 500
+
+```
+
+Which appears to have included all of the loci ("chromosomes") and has calculated smaller pi numbers, which I think I would then just average, per the description here: https://github.com/alexharkess/PBIO_6550/wiki/Lab-9-:-Population-genomics
+
+```{r}
+# using some of the code from that github site, look at a summary
+
+dat <- read.table("../data/rock_test_window.windowed.pi", header = TRUE) # or whatever you named your file.
+
+plot(dat$PI~dat$CHROM)
+
+```
+
+
+Lots of discussion about how vcftools is a poor version of calculating pi here: http://seqanswers.com/forums/showthread.php?t=33639
+
+"...calculating a pi per site that is stored in the INFO field of the vcf. Then, it can be used to calculate a pi per window (summation of pi per site and then division by the number of positions analysed)"
+
+my calculation of pi per site is the following:
+
+sub PixSite(){
+my $c=$_[0];
+my $j=$_[1];
+my $pi=0;
+$pi=(2*$j*($c-$j))/($c*($c-1));
+return $pi;
+}
+
+where c is the number of covered positions (e.g 15 out of 20 individuals would give 30 alleles at this site, it corresponds to AN field in GATK INFO column of your vcf file) and j is the number of alternate alleles (AC field in the GATK INFO column of your vcf file, e.g if 5 individuals are homozygous for the alternate allele, j would be 10).
+
+This comes from a small rearrangement of Begun's formula and from the definition itself.
+
+Once I have a pi per site adjusted for different coverages, I can calculate average pi per window.
+
+For doing this, I count the number of analysed positions in the window of 1000bp that pass certain filtering criteria taking into account both variant and invariant sites (e.g 990 out of 1000bp have good coverage in 5 or more genomes, and are not part of repetitive elements, and and and...). Then I divide the summatory of pi per site by the number of analysed positions in the window (990). 
+It is not necessary to adjust for the heterogeneous coverage in the invariant sites because pi in those sites is 0 and it doesn't matter the value of the denominator c(c-1).
+
+
+Also useful to look at the definition and summation calculations here:
+https://binhe.org/2011/12/29/calculate-nucleotide-diversity-per-base-pair-summation-method/
+
+## Trial with vcfR
+
+```{r}
+library(vcfR)
+
+vcf <- read.vcfR("../data/rockfish6_aug2018.vcf.gz", verbose = FALSE )
+
+dna <- ape::read.dna("../data/gtseq18_loci.fasta", format = "fasta")
+```
+
+```{r}
+# get some info from the VCF 
+vcf@fix
+```
+
+
+```{r}
+chrom <- create.chromR(name='Supercontig', vcf=vcf, seq=dna)
+
+```
+
+## Next steps
+So, I think what I need to do is to calculate --window-pi for each of the species. Assuming each window stretches across the entirety of each chromosome, then averaging those --window-pi statistics should get me a reasonable estimate of pi for the entire set of amplicons.
+
+test case:
+```{sh, eval=FALSE}
+# operating here:
+# /Users/dianabaetscher/Desktop/NOAA_grad/git-repos/rockfish-species-id/data/spp_vcfs
+
+vcftools --gzvcf aleutianus_noMNP_noComplex_noPriors.vcf.gz --window-pi 500 --out aleutianus_test_window
+
+```
+
+And then do a quick check to see if the maliger and aleutianus pi values are what we would expect...
+
+```{r}
+# read that vcftools output into a table
+aleut_dat <- read.table("../data/spp_vcfs/aleutianus_test_window.windowed.pi", header = TRUE)
+
+# and average the values for pi
+aleut_dat %>%
+  summarise(mean(PI))
+```
+I think there still might be an issue in that only 47 rows appear (so we're not properly accounting for all of the non-variant sites?)
+
+Try maliger:
+```{sh, eval = FALSE}
+
+dsb:spp_vcfs dianabaetscher$ vcftools --gzvcf maliger_noMNP_noComplex_noPriors.vcf.gz --window-pi 500 --out maliger_test_window
+
+VCFtools - 0.1.17
+(C) Adam Auton and Anthony Marcketta 2009
+
+Parameters as interpreted:
+	--gzvcf maliger_noMNP_noComplex_noPriors.vcf.gz
+	--out maliger_test_window
+	--window-pi 500
+
+```
+
+Do the same thing to read in the table and then average the pi values across chromosomes
+
+```{r}
+# read in the window-pi data
+maliger_dat <- read.table("../data/spp_vcfs/maliger_test_window.windowed.pi", header = TRUE)
+
+# and average the values for pi
+maliger_dat %>%
+  summarise(mean(PI))
+
+```
+This is the case in point. 
+
+There are 79 loci with 1 or more variant sites in maliger, but only 47 loci (out of 96 in aleutianus)
+
+## New idea: use the vcftools per-site calculation and then add subtract the number of variant sites from the total number of bases in all 96 amplicons (11,368) to get the number of invariant sites. Then average pi over all bases.
+
+
+Using the sites-pi file that I created and read in above:
+```{r}
+# how many variant sites included in the vcftools calculation per species?
+spp_sites_pi %>%
+  group_by(species) %>%
+  tally() %>%
+  arrange(desc(n))
+```
+
+Now mutate to add a column with the number of invariant sites which equals the total number of bases in all 96 loci (11,368) - n.
+
+```{r}
+spp_sites_pi %>%
+  group_by(species) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  mutate(invariant = 11368 - n)
+
+```
+
+Let's just try dividing the sum of the per-site pi by the total number of bases in the 96 loci
+```{r}
+spp_sites_pi %>%
+  group_by(species) %>%
+  summarise(sum(PI)) %>%
+  mutate(mean = `sum(PI)`/11368) %>%
+  arrange(desc(mean)) %>%
+  rename(nuc_diversity = mean) %>%
+  select(-`sum(PI)`) %>%
+  write_csv("csv_outputs/nucleotide_diversity.csv")
+```
+
+So, in summary: 
+I calculated nucleotide diversity as --sites-pi in vcftools, summed the values from --sites-pi for each species, and then divided that number by the total number of sites (11,368) in the 96 loci. As far as I can tell, this properly accounts for the invariant sites which are otherwise not included by vcftools. The coverage at the invariant sites is not a necessary part of the calculation (at least according to some of what I've read).
+
+
+
+

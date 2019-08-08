@@ -1,0 +1,279 @@
+---
+title: "genetic distance measures"
+output: html_notebook
+---
+
+Rather than rely on heterozygosity, my committee wanted to see the genetic distance between atrovirens and the other 53 species.
+
+I used MEGA to generate distance measures using a variety of models from the aligned sequence data and will compare those models here.
+
+```{r libraries-n-data}
+library(tidyverse)
+library(forcats)
+
+dist <- read_csv("~/Desktop/Chapter3_sppID/sebastes_genetic_distance_summary.csv")
+
+# group by model
+dist1 <- dist %>%
+  group_by(model_type) %>%
+  rename(Model = model_type)
+
+
+```
+
+plot the different models
+```{r}
+dist_plot <- ggplot(dist1, aes(x = fct_reorder(species, genetic_distance, .desc = FALSE), y = genetic_distance, shape = Model)) +
+  geom_point(size = 2, alpha = 0.6) +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Genetic distance from S. atrovirens")
+
+
+dist_plot +
+  theme(
+    axis.text.x = element_text(angle = 90, face = "italic"),
+    legend.position = c(0.8, 0.3)
+  )
+
+ggsave("pdf_outputs/genetic_distance_plot.pdf", height = 6, width = 8)
+```
+
+Another question is whether this genetic distance is consistent with the heterozygosity rank.
+
+I can read in the int_hz data and stick that onto the genetic distance data frame
+
+```{r int-hz}
+hz <- read_csv("csv_outputs/filtered_int_hz.csv")
+
+hz2 <- hz %>% 
+  group_by(collection) %>%
+  summarise(hz = mean(fract_hz)) %>%
+  rename(species = collection)
+
+```
+
+Stick that info onto the dataframe
+```{r}
+dist_hz <- dist %>%
+  left_join(., hz2)
+
+dist_hz
+```
+
+plotting it is non-trivial because ggplot intentionally makes this challenging
+
+
+## Plot genetic distance vs. hz (and nucleotide diversity)
+
+
+Similar to in previous exercises, I want to change the factor levels to correspond to phylogenetic relationships.
+
+I want to set the species phylogenetically rather than alphabetically:
+```{r}
+# set the levels explicitly
+dist_hz$species <- factor(dist_hz$species, levels = c("chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "semicinctus", "elongatus", "miniatus", "pinniger", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "ensifer", "babcocki", "nigrocinctus", "rubrivinctus", "serriceps", "rufus", "ovalis", "hopkinsi", "rufinanus", "moseri", "jordani", "paucispinis", "goodei", "levis", "entomelas", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "diploproa", "melanostomus", "reedi", "crameri", "polyspinis", "alutus", "melanostictus", "aleutianus", "emphaeus", "wilsoni", "zacentrus", "proriger", "borealis"))
+
+# colors
+mycol <- colorRampPalette(c("palegreen", "darkolivegreen", "darkslategrey", "darkgreen", "deepskyblue", "aquamarine4", "seagreen4", "cadetblue", "cyan", "darkblue", "midnightblue", "blue", "dodgerblue", "darkcyan", "darkslateblue", "slateblue", "steelblue4", "skyblue", "paleturquoise4", "brown", "royalblue", "purple4", "orange", "darkorange", "darkgoldenrod", "chocolate", "tan4", "saddlebrown", "sienna", "navajowhite4", "darkgray", "black"))(54)
+
+dist_hz %>%
+  filter(model_type == "pairwise_analytic") %>%
+  ggplot(aes(x = genetic_distance, y = hz, color = species)) +
+  geom_point() +
+  theme_bw() +
+  scale_color_manual(values = mycol) +
+  xlab("Genetic distance") +
+  ylab("Heterozygosity")
+
+ggsave("pdf_outputs/dist_vs_hz.pdf", width = 9, height = 5)
+```
+
+
+Try using pegas to get at nucleotide diversity
+```{r}
+# library(pegas)
+# library(adegenet)
+# library(hierfstat)
+```
+
+Use hierfstat
+```{r dataset-genepop}
+# dataset1 <- read.genepop("../new_baseline_data/processed/sebastes_final_dataset.gen", ncode = 3)
+# 
+# # set population as a factor
+# dataset1@pop <- as.factor(dataset1@pop)
+
+```
+
+```{r}
+# stats <- basic.stats(dataset1, diploid = TRUE, digits = 3)
+# 
+# # expected hz
+# hz_exp <- as.data.frame(stats$Hs)
+# rock_he <- rownames_to_column(hz_exp) %>%
+#   rename(Locus = rowname) %>%
+#   write_csv("csv_outputs/rockfish_Hs.csv")
+```
+
+```{r}
+# rock_he %>% 
+#   na_if("NaN") %>%
+#   na_if("-Inf") %>%
+#   select(-Locus) %>%
+#   colMeans(., na.rm = TRUE)
+
+```
+Those look a little bit wonky, namely, the negative expected heterozygosity...
+
+
+
+## UPDATE: 8 JULY 2019 
+Here I will modify the previous figure from my dissertation that plotted heterozygosity vs. genetic distance and replace that with nucleotide diversity vs. genetic distance.
+
+Nucleotide diversity was calculated as --sites-pi in vcftools, I summed the values from --sites-pi for each species, and then divided that number by the total number of sites (11,368) in the 96 loci. As far as I can tell, this properly accounts for the invariant sites which are otherwise not included by vcftools. The coverage at the invariant sites is not a necessary part of the calculation (at least according to some of what I've read). 
+
+The details are in `16-nucleotide-diversity.Rmd`
+
+Read in that file here:
+```{r}
+pi <- read_csv("csv_outputs/nucleotide_diversity.csv")
+```
+
+and the file with genetic distance:
+```{r}
+dist <- read_csv("~/Desktop/Chapter3_sppID/sebastes_genetic_distance_summary.csv")
+
+# Stick that info onto the dataframe
+
+dist_pi <- dist %>%
+  left_join(., pi)
+
+dist_pi %>%
+  filter(model_type == "pairwise_analytic")
+```
+
+plotting it is non-trivial because ggplot intentionally makes this challenging
+
+
+## Plot genetic distance vs. nucleotide diversity
+
+
+Similar to in previous exercises, I want to change the factor levels to correspond to phylogenetic relationships.
+
+I want to set the species phylogenetically rather than alphabetically:
+```{r}
+# set the levels explicitly
+dist_pi$species <- factor(dist_pi$species, levels = c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "semicinctus", "elongatus", "miniatus", "pinniger", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "ensifer", "babcocki", "nigrocinctus", "rubrivinctus", "serriceps", "rufus", "ovalis", "hopkinsi", "rufinanus", "moseri", "jordani", "paucispinis", "goodei", "levis", "entomelas", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "diploproa", "melanostomus", "reedi", "crameri", "polyspinis", "alutus", "melanostictus", "aleutianus", "emphaeus", "wilsoni", "zacentrus", "proriger", "borealis"))
+
+# colors
+mycol <- colorRampPalette(c("palegreen", "darkolivegreen", "darkslategrey", "darkgreen", "deepskyblue", "aquamarine4", "seagreen4", "cadetblue", "cyan", "darkblue", "midnightblue", "blue", "dodgerblue", "darkcyan", "darkslateblue", "slateblue", "steelblue4", "skyblue", "paleturquoise4", "brown", "royalblue", "purple4", "orange", "darkorange", "darkgoldenrod", "chocolate", "tan4", "saddlebrown", "sienna", "navajowhite4", "darkgray", "black"))(54)
+
+dist_pi %>%
+  filter(model_type == "pairwise_analytic") %>%
+  ggplot(aes(x = genetic_distance, y = nuc_diversity, color = species)) +
+  geom_point() +
+  theme_bw() +
+  scale_color_manual(values = mycol) +
+  xlab("Genetic distance") +
+  ylab("Nucleotide diversity")
+
+#ggsave("pdf_outputs/dist_vs_hz.pdf", width = 9, height = 5)
+```
+
+Okay, now switch the color scheme to subgenera rather than species:
+
+Make a list of subgenera and species and read that in
+```{r}
+subgenera <- read_csv("../data/sebastes_subgenera.csv")
+  
+```
+
+
+```{r}
+# join expected Hz and genetic distance
+dist_pi2 <- dist_pi %>%
+  left_join(., subgenera)
+
+# and set the levels
+dist_pi2$subgenus <- factor(dist_pi2$subgenus, levels = c("Pteropodus", "Auctospina", "Allosebastes", "Hispaniscus", "Rosicola", "Sebastomus", "Sebastichthys", "Sebastocarus", "Acutomentum", "Sebastodes", "Sebastosomus", "Sebastopyr", "Eosebastes", "Zalopyr", "unclassified"))
+
+levels(dist_pi2$subgenus)
+```
+
+
+Change the colors:
+```{r}
+library(RColorBrewer)
+# subgenera colors
+#mycolors = colorRampPalette(brewer.pal(name="Accent", n = 8))(15)
+mycolors = c("darkgreen", "dodgerblue", "darkblue", "chartreuse", "aquamarine", "deeppink", "firebrick4", "orchid", "purple4", "orange", "orangered", "saddlebrown", "navajowhite4", "darkgray", "black")
+  
+# species colors
+mycol <- colorRampPalette(c("palegreen", "darkolivegreen", "darkslategrey", "darkgreen", "deepskyblue", "aquamarine4", "seagreen4", "cadetblue", "cyan", "darkblue", "midnightblue", "blue", "dodgerblue", "darkcyan", "darkslateblue", "slateblue", "steelblue4", "skyblue", "paleturquoise4", "brown", "royalblue", "purple4", "orange", "darkorange", "darkgoldenrod", "chocolate", "tan4", "saddlebrown", "sienna", "navajowhite4", "darkgray", "black"))(54)
+```
+
+
+```{r plot-dist-hz}
+# italicize atrovirens in the axis title
+my_x_title <- expression(paste("Genetic distance from ", italic("S. atrovirens")))
+
+# plot 
+d2 <- dist_pi2 %>%
+  filter(model_type == "pairwise_analytic") %>%
+  ggplot(aes(x = genetic_distance, y = nuc_diversity, color = subgenus)) +
+  geom_point(size = 2, alpha = 0.9) +
+  theme_bw() +
+  scale_color_manual(values = mycolors) +
+  xlab(my_x_title) +
+  ylab("Nucleotide diversity")
+
+d2 + theme(
+  legend.text = element_text(size = 8, face = "italic")) + 
+  guides(color = guide_legend(title="Subgenus"))
+
+# save that plot
+# ggsave("pdf_outputs/subgenera_genetic_distance_v_nucleotide_diversity.pdf", width = 7, height = 5)
+```
+
+Try adding a trend line?
+```{r}
+d2 <- dist_pi2 %>%
+  ungroup() %>%
+  filter(model_type == "pairwise_analytic") %>%
+  ggplot() +
+  geom_point(aes(x = genetic_distance, y = nuc_diversity, color = subgenus), 
+             size = 2, alpha = 0.9) +
+  geom_smooth(aes(x = genetic_distance, y = nuc_diversity), method = lm, se=TRUE) +
+  theme_bw() +
+  scale_color_manual(values = mycolors) +
+  xlab(my_x_title) +
+  ylab("Nucleotide diversity")
+
+d2 + theme(
+  legend.text = element_text(size = 8, face = "italic")) + 
+  guides(color = guide_legend(title="Subgenus"))
+
+# add a regression line?
+# lm_eqn <- function(df){
+#     m <- lm(y ~ x, df);
+#     eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+#          list(a = format(unname(coef(m)[1]), digits = 2),
+#               b = format(unname(coef(m)[2]), digits = 2),
+#              r2 = format(summary(m)$r.squared, digits = 3)))
+#     as.character(as.expression(eq));
+# }
+# 
+# p + geom_text(x = 25, y = 300, label = lm_eqn(df), parse = TRUE)
+```
+
+
+
+```{r}
+dist_pi2 %>%
+  filter(model_type == "pairwise_analytic") %>%
+  arrange(desc(genetic_distance)) %>%
+  select(-model_type) %>%
+  filter(subgenus == "Sebastomus")
+```
+

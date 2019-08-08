@@ -1,0 +1,20 @@
+---
+title: "checking visual ids with microsatellite ids from July 2015"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+spp_ids <- read_csv("csv_outputs/nsf-PofZ-0.5_assignments.csv")
+
+ids <- read_csv("~/Desktop/nsf_sppID_ids_july2015.csv")
+```
+
+```{r}
+ids %>%
+  left_join(., spp_ids, by = c("NMFS_DNA_ID" = "indiv"))
+```
+

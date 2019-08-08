@@ -1,0 +1,646 @@
+---
+title: "downsampled baseline"
+output: html_notebook
+---
+This is the final dataset and analysis that is referred to in the manuscript and Chapter 4.
+
+## Trying to get the order to be more chronological
+Realistically, I should start from the beginning: 
+1. Remove all juveniles (except crameri, reedi, wilsoni)
+2. Downsample the baseline to 32 samples per species.
+3. Remove samples with scaled_likelihoood > 0.5 and z-score < -3
+
+
+read in data and libraries
+```{r}
+library(rubias)
+library(tidyverse)
+library(CKMRsim) # add this for the index markers function
+
+# read in these filtered genotypes
+new2col <- read_csv("csv_outputs/new2col.csv") %>%
+  ungroup()
+
+# new2col is made by the following steps in `05-cleaner-baseline.Rmd`
+# new2col <- two_col %>%
+# mutate(repunit = ifelse(indiv == "R035252", "caurinus", repunit)) %>%
+# mutate(collection = ifelse(indiv == "R035252", "caurinus", collection)) %>%
+# filter(!repunit %in% c("helvomaculatus", "simulator", "brevispinis"))
+
+# raw genotypes
+genos <- readRDS("../new_baseline_data/processed/called_genos_na_explicit.rds")
+# genos1 <- genos %>% 
+#   filter(!str_detect(NMFS_DNA_ID, "N")) # remove Lorne's ambiguous yelloweye samples
+# labels <- readRDS("../new_baseline_data/processed/label-tibble.rds")
+# samples <- readRDS("../new_baseline_data/processed/sample-sheet-tibble.rds")
+
+# meta data
+meta <- readRDS("../new_baseline_data/processed/meta-data-tibble.rds") %>%
+  select(1,8,13,22) %>% # just the relevant columns for now
+  mutate(REPORTED_LIFE_STAGE = ifelse(REPORTED_LIFE_STAGE == "Adult", "ADULT", REPORTED_LIFE_STAGE)) %>%   # make the syntax consistent
+   mutate(REPORTED_LIFE_STAGE = ifelse(REPORTED_LIFE_STAGE == "Juvenile", "JUVENILE", REPORTED_LIFE_STAGE)) %>%
+  mutate(REPORTED_LIFE_STAGE = ifelse(is.na(REPORTED_LIFE_STAGE), "UNKNOWN", REPORTED_LIFE_STAGE)) # be explict about NAs
+
+# there are thousands of nmfs ids with two metadata entries
+doubles <- meta %>%
+  group_by(NMFS_DNA_ID) %>%
+  tally() %>%
+  filter(n > 1)
+
+# remove one copy of each?
+
+new2col
+```
+
+
+## Remove juveniles
+
+How many of those are juveniles?
+```{r}
+juvies <- new2col %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  filter(REPORTED_LIFE_STAGE == "JUVENILE") %>%
+  select(collection, indiv) %>%
+  unique()
+
+juv_samples <- juvies %>%
+  group_by(collection) %>%
+  tally() %>%
+  rename(juv_samples = n)
+```
+There are 164 (?) juvenile samples
+
+If I remove samples that are juveniles, what are my numbers per species?
+```{r}
+new2col %>%
+  semi_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  #anti_join(., juvies, by = "indiv") %>%
+  group_by(collection) %>%
+  tally() %>%
+  rename(total_samples = n) %>%
+  left_join(., juv_samples, by = "collection") %>%
+  mutate(remaining_samples = total_samples-juv_samples) %>%
+  arrange(remaining_samples)
+
+```
+We lose reedi and wilsoni when we exclude juveniles, and drop down to just 2 samples of crameri and five of serriceps.
+
+However, generally including juveniles is a bad idea. So here's what I'll do: For any species for which we end up with fewer than 5 samples, I will include juveniles up to that number.
+
+```{r}
+# just juvenile samples for these three species
+juvs_to_keep <- new2col %>%
+  ungroup() %>%
+  filter(collection %in% c("reedi", "wilsoni", "crameri")) %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  group_by(collection) %>%
+  filter(REPORTED_LIFE_STAGE == "JUVENILE") %>%
+  select(1:184)
+
+```
+
+Now that I have those samples selected, I can remove all juvenile samples and put back those from the `juvs_to_keep`
+```{r}
+dataset <- new2col %>%
+  ungroup() %>%
+  anti_join(juvies) %>%
+  bind_rows(juvs_to_keep)
+
+dataset %>%
+  group_by(repunit) %>%
+  tally() %>%
+  arrange(n) %>%
+  write_csv("csv_outputs/dataset_spp_wo_juvs.csv")
+  
+```
+Keeping just the juveniles from those three species, we have a total of 1,530 samples from 54 species.
+
+
+## Downsample
+
+What if I take a maximum of 32 samples per species?
+(use set.seed to get reproducible results!)
+```{r downsample}
+# which species have fewer than 32 samples?
+sm_grps <- dataset %>%
+  group_by(collection) %>%
+  tally() %>%
+  arrange(n) %>%
+  filter(n < 33)
+
+# make a 2-col dataframe with just those groups
+sm_d2 <- dataset %>%
+  semi_join(., sm_grps) %>%
+  ungroup()
+
+# which species have more than 32 samples?
+lrg_grps <- dataset %>%
+  group_by(collection) %>%
+  tally() %>%
+  arrange(n) %>%
+  filter(n > 32)
+  
+# downsample those groups
+set.seed(5)
+down_sam <- dataset %>%
+  semi_join(., lrg_grps) %>%
+  group_by(collection) %>%
+  sample_n(., 32, replace = FALSE) %>%
+  ungroup()
+
+# finish the set.seed
+set.seed(NULL)
+
+# and add the data from the other groups back into the dataframe
+down_data <- sm_d2 %>%
+  bind_rows(down_sam) #%>%
+  # group_by(collection) %>%
+  # tally() %>%
+  # arrange(n)
+```
+
+1010 total samples
+54 species
+
+
+## Self-assignment
+
+Now do the self-assignment:
+```{r}
+assign_down <- self_assign(down_data, gen_start_col = 5)
+```
+
+Assignment accuracy?  
+```{r}
+assign_down %>%
+  ungroup() %>%
+  filter(scaled_likelihood > 0.95) %>%
+  mutate(accurate = if_else(repunit == inferred_repunit, TRUE, FALSE)) %>%
+  filter(accurate == TRUE) #%>%
+  #filter(collection == "carnatus")
+
+```
+
+```{r}
+993/1010
+```
+
+z-scores?
+```{r}
+z_outliers <- assign_down %>%
+  filter(scaled_likelihood > 0.5 & z_score < -3) %>%
+  arrange(z_score)
+
+z_outliers
+```
+There are 10 samples with z-scores < -3, including 5 hopkinsi samples.
+
+Let's remove those.
+```{r}
+down_data2 <- down_data %>%
+  ungroup() %>%
+  anti_join(., z_outliers)
+```
+
+Removing those leaves us with 1000 samples.
+
+
+# Mixture assignment with outliers?
+
+Just to test it out, I'm going to remove these outliers from the baseline and then perform rubias's mixture assignment with them.
+
+```{r}
+# reference
+down_data2 <- down_data2 %>%
+  ungroup()
+
+# outliers for mixture assignment
+zs <- z_outliers %>%
+  select(indiv)
+
+just_zs <- down_data %>%
+  ungroup() %>%
+  right_join(., zs) %>%
+  mutate(sample_type = "mixture")
+
+```
+
+Now that the data are separated and formatted, do the mixture assignment
+```{r}
+mix_zs <- infer_mixture(reference = down_data2, mixture = just_zs, gen_start_col = 5)
+```
+
+```{r}
+mix_zs$indiv_posteriors %>%
+  filter(PofZ > 0.50)
+  
+```
+Interesting! One of the hopkinsi comes up as caurinus... but with a z-score of -14! What is it?? The z-scores for the other fish are also pretty extraordinary (none are within 2 standard deviations of the mean).
+
+Take a quick look at the three additional hopkinsi in mixture assignment:
+```{r}
+# previous 10 samples 
+just_zs
+
+# plus tres mas
+add_three <- down_data %>%
+  right_join(., tres_mas) %>%
+  mutate(sample_type = "mixture")
+
+# combine those into one mixture list
+thirteen <- bind_rows(just_zs, add_three)
+
+# remove the tres mas from the reference dataframe
+mix_ref <- down_data2 %>%
+  anti_join(., tres_mas)
+
+# Now do the mixture assignment
+mix2 <- infer_mixture(reference = mix_ref, mixture = thirteen, gen_start_col = 5)
+
+```
+Take a look at those results
+```{r}
+thirteen %>%
+  filter(repunit == "hopkinsi")
+
+mix2$indiv_posteriors %>%
+  filter(PofZ > 0.50) %>%
+  # filter(mixture_collection == "hopkinsi") %>%
+  # filter(repunit == "caurinus") %>%
+  # select(z_score)
+  filter(mixture_collection == repunit)
+  
+```
+Wild! So three of the hopkinsi assign to caurinus, but with really really low z-scores.
+I think this is actually interesting enough to include as a small analysis in the methods/results.
+
+
+In addition, let's create a single reporting unit for gopher/black-and-yellow
+
+
+## single GBY reporting unit
+
+Since all of the misassignments are GBY, make a single reporting unit.
+
+```{r}
+# change the carnatus reporting unit to chrysomelas
+gby_repu_2col <- down_data2 %>%
+  mutate(repunit = ifelse(repunit == "carnatus", "chrysomelas", repunit))
+
+# confirm that the repunit is changed but the collection is not.
+gby_repu_2col %>%
+  filter(collection == "carnatus")
+```
+
+Now try self-assignment with the single reporting unit
+```{r}
+gby_repu_assigned <- gby_repu_2col %>%
+  self_assign(., gen_start_col = 5)
+
+```
+
+Accuracy?
+```{r}
+gby_repu_assigned %>%
+  filter(scaled_likelihood > 0.95) %>%
+  filter(repunit == inferred_repunit)
+```
+
+```{r}
+992/1000
+```
+
+```{r}
+gby_repu_assigned %>%
+  filter(scaled_likelihood > 0.5 & scaled_likelihood < 0.95)
+```
+All assignments below the 95% threshold were gopher/black-and-yellow.
+
+What about z-statistics?
+```{r}
+gby_repu_assigned %>%
+  ungroup() %>%
+  filter(scaled_likelihood > 0.5 & z_score < -3)
+
+outies <- gby_repu_assigned %>%
+  ungroup() %>%
+  filter(scaled_likelihood > 0.5 & z_score < -3)
+
+# tres_mas <- outies %>%
+#   select(indiv) %>%
+#   ungroup()
+```
+Three additional hopkinsi, as before.
+
+What were the z-scores for these hopkinsi in the previous self-assignment?
+```{r}
+assign_down %>%
+  ungroup() %>%
+  filter(scaled_likelihood > 0.5 & repunit == "hopkinsi") %>%
+  arrange(z_score) %>%
+  select(indiv, z_score) %>%
+  ungroup()
+
+```
+Not sure what to do about this. Should I have left in the three hopkinsi that only became problematic the second time around? Or can I justify iterating because the z-statistic is based on the mean of the data, so if I have changed the genotypes that are valid hopkinsi, then the mean has changed, and thus, it is unsurprising that additional samples are now outliers.
+
+To be conservative, I think it makes some sense to remove these additional three fish.
+
+
+## Once more, after removing those hopkinsi
+
+```{r}
+down_data3 <- gby_repu_2col %>%
+  ungroup() %>%
+  anti_join(., outies, by = "indiv")
+```
+
+
+Self-assignment once again, to test whether we can actually eliminate the samples with z-statistics < -3
+
+```{r}
+assigned3 <- self_assign(down_data3, gen_start_col = 5)
+```
+
+Check the assignments and check the z-scores
+```{r}
+assigned3 %>%
+  filter(scaled_likelihood > 0.5 & z_score < -3)
+```
+Cool, so there is a point at which the samples are all falling within the expected distribution of "accurate" assignments.
+
+
+## Phylogenetic trees
+
+Let's grab information for those samples so that I can make the trees with them.
+```{r}
+clean_samples <- assigned3 %>%
+  ungroup() %>%
+  filter(collection == inferred_collection) %>%
+  select(indiv, collection) %>%
+  ungroup()
+```
+
+997 samples in total.
+
+
+Read in genotype data with the GTseq run number and the sample ids
+```{r}
+genos <- readRDS("../new_baseline_data/processed/called_genos_na_explicit.rds")
+
+genos_gtseq <- genos %>%
+  ungroup() %>%
+  select(NMFS_DNA_ID, gtseq_run, id) %>%
+  ungroup()
+```
+
+
+```{r}
+# are there samples that were run in multiple GT-seq runs?
+# if so, I want to be able to select just one of those samples for the bamlist
+clean_samples %>%
+  left_join(., genos_gtseq, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  group_by(collection) %>%
+  unique() %>%
+  arrange(indiv) %>%
+  select(indiv) %>%
+  ungroup() %>%
+  group_by(indiv) %>%
+  tally() %>%
+  arrange(desc(n))
+  
+```
+
+For building the phylogenetic trees, I need a list of samples and GTseq runs to use for Freebayes. And for samples that were genotyped twice, I want to choose the "best" genotype.
+
+NOTE: these are NOT duplicates within my self-assignment dataset, they are duplicates in `called_genos_na_explicit.rds` 
+
+```{r}
+duplicates <- c("R001570","R011993","R012111","R012125", "R012201")
+
+dupl <- as.tibble(duplicates)
+dups <- dupl %>%
+  rename(NMFS_DNA_ID = value) %>%
+  ungroup()
+
+```
+
+Check out the duplicate genotypes
+```{r}
+dup_genos <- dups %>%
+  left_join(., genos) %>%
+  ungroup()
+```
+
+Now take the genotype with the highest total read depth.  
+```{r take-just-one}
+# slow-ish function to get the total read depth column
+tdepth <- function(a, d) {
+  if(any(is.na(a))) {
+    return(NA)
+  }
+  if(a[1]==a[2]) {
+    return(d[1])
+  } else {
+    return(d[1] + d[2])
+  }
+  
+}
+# this takes the highest read-depth instance of each duplicately-genotyped individual.
+one_each <- dup_genos %>%
+  group_by(NMFS_DNA_ID, locus, gtseq_run) %>%
+  mutate(total_depth = tdepth(allele, depth)) %>%
+  ungroup() %>%
+  arrange(NMFS_DNA_ID, locus, total_depth, gtseq_run, depth) %>%
+  group_by(NMFS_DNA_ID, locus) %>%
+  mutate(rank = 1:n()) %>% 
+  #ungroup() %>%
+  filter(rank <= 2)
+
+```
+
+Confirm that there's only one instance of each sample, and look at the gtseq run and id info here
+```{r}
+one_dup <- one_each %>%
+  group_by(NMFS_DNA_ID, gtseq_run, id) %>%
+  tally() %>%
+  filter(n < 100) # choose the sample with fewer high-read-depth loci to remove
+
+one_dup
+```
+
+Okay, now remove those samples, which should leave us with our dataset for building trees.
+```{r}
+clean_samples %>%
+  left_join(., genos_gtseq, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  anti_join(., one_dup) %>%
+  unique() %>%
+  arrange(collection) %>%
+  write_csv("csv_outputs/clean_gtseq_ids_for_trees.csv")
+
+```
+
+
+## calculate and plot int hz for each species
+
+I want to use this same dataset of 997 individuals for calculating int-hz.
+```{r}
+t1 <- clean_samples %>%
+  left_join(down_data3) %>%
+  group_by(indiv, collection) %>%
+  select(-sample_type, -repunit) %>%
+  gather(locus, allele, 3:182) %>%
+  ungroup() %>% # need to remove the .1 and .2 on the loci
+  separate(locus, c("Locus", "gene.copy"), sep = "[.]")
+```
+
+```{r compute-int-hzs}
+int_hz <- t1 %>% 
+  group_by(collection, indiv, Locus) %>% 
+  summarise(hz = allele[1]!=allele[2]) %>% 
+  filter(!is.na(hz)) %>% 
+  group_by(indiv, collection) %>% 
+  summarise(num_loc = n(), num_hz = sum(hz), fract_hz = num_hz / num_loc)
+
+```
+
+## What about making a series of boxplots?
+
+I want to set the species phylogenetically rather than alphabetically:
+```{r}
+# set the levels explicitly
+int_hz$collection <- factor(int_hz$collection, levels = c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "semicinctus", "elongatus", "miniatus", "pinniger", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "ensifer", "babcocki", "nigrocinctus", "rubrivinctus", "serriceps", "rufus", "ovalis", "hopkinsi", "rufinanus", "moseri", "jordani", "paucispinis", "goodei", "levis", "entomelas", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "diploproa", "melanostomus", "reedi", "crameri", "polyspinis", "alutus", "melanostictus", "aleutianus", "emphaeus", "wilsoni", "zacentrus", "proriger", "borealis"))
+
+# check that the levels stuck
+levels(int_hz$collection)
+
+# now boxplot it
+box2 <- ggplot(int_hz) +
+  geom_boxplot(aes(x = collection, y = fract_hz), position = "dodge") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Internal heterozygosity")
+
+
+box2 +
+  theme(
+    axis.text.x = element_text(angle = 90, size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  ) +
+  guides(fill = FALSE)
+
+ggsave("pdf_outputs/clean_int-hz-boxplot.pdf", height = 8, width = 10)
+
+```
+Summary Statistics
+The lower and upper hinges correspond to the first and third quartiles (the 25th and 75th percentiles). 
+
+The upper whisker extends from the hinge to the largest value no further than 1.5 x IQR from the hinge (where IQR is the inter-quartile range, or distance between the first and third quartiles). The lower whisker extends from the hinge to the smallest value at most 1.5 x IQR of the hinge. Data beyond the end of the whiskers are called "outlying" points and are plotted individually.
+Now what about adding in the subgenera and coloring the boxes by that?
+
+Make a list of subgenera and species and read that in
+```{r}
+subgenera <- read_csv("../data/sebastes_subgenera.csv") %>%
+  ungroup()
+  
+```
+
+
+```{r}
+int_hz_subg <- int_hz %>%
+  ungroup() %>%
+  left_join(., subgenera, by = c("collection" = "species"))
+
+# and set the levels explicitly again
+int_hz_subg$collection <- factor(int_hz_subg$collection, levels = c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "emphaeus", "wilsoni", "zacentrus", "proriger", "semicinctus", "rubrivinctus", "levis", "elongatus", "miniatus", "pinniger", "babcocki", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "rufus", "ensifer", "diploproa", "nigrocinctus", "serriceps", "ovalis", "hopkinsi", "rufinanus", "moseri", "entomelas", "alutus", "jordani", "paucispinis", "goodei", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "melanostomus", "crameri", "melanostictus", "aleutianus", "borealis", "reedi", "polyspinis"))
+
+# check that the levels stuck
+#levels(int_hz_subg$collection)
+
+```
+
+Try coloring the boxplot by the subgenera
+
+I need to confirm the subgenera affiliations, but I think that could end up looking pretty cool.
+I ended up using a combo of Li et al. 2007, Kendall 2000, and Hyde and Vetter 2007.
+
+Change the colors:
+```{r}
+library(RColorBrewer)
+mycolors = colorRampPalette(brewer.pal(name="Accent", n = 8))(14)
+  
+#mycolors = c(brewer.pal(name="Set1", n = 6), brewer.pal(name="Set2", n = 8))
+
+```
+
+Set the subgenera to the order of the factor (species)
+```{r}
+int_hz2 <- int_hz_subg %>%
+  ungroup()
+
+int_hz2$subgenus <- factor(int_hz2$subgenus, levels = c("Pteropodus", "Allosebastes", "Hispaniscus", "Rosicola", "Sebastomus", "Sebastichthys", "Sebastocarus", "Acutomentum", "Sebastodes", "Sebastosomus", "Sebastopyr", "Eosebastes", "Zalopyr", "unclassified"))
+
+```
+
+
+```{r}
+
+# now boxplot it
+box3 <- ggplot(int_hz2) +
+  geom_boxplot(aes(x = collection, y = fract_hz, fill = subgenus), position = "dodge") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Internal heterozygosity") +
+  scale_fill_manual(values = mycolors)
+
+
+box3 +
+  theme(
+    axis.text.x = element_text(angle = 90, size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  )
+#+
+  #guides(fill = FALSE) 
+
+ggsave("pdf_outputs/int-hz-boxplot-subgenera_v2.pdf", height = 8, width = 10)
+
+```
+
+We could also imagine ordering the species according to their internal heterozygosity:
+
+```{r}
+library(forcats)
+
+box4 <- int_hz2 %>%
+  ggplot(aes(x = fct_reorder(collection, fract_hz, fun = median, .desc =TRUE), fract_hz, fill = subgenus)) +
+  geom_boxplot(position = "dodge") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Internal heterozygosity") +
+  scale_fill_manual(values = mycolors)
+
+box4 +
+  theme(
+    axis.text.x = element_text(angle = 90, size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  ) #+
+  #guides(fill = FALSE)
+
+ggsave("pdf_outputs/int-hz-boxplot-ordered.pdf", height = 8, width = 10)
+
+```
+
+## Calculate the reduction in heterozygosity in comparison to S. atrovirens
+
+```{r}
+int_hz %>%
+  group_by(collection) %>%
+  summarise(ave_hz = mean(fract_hz)) %>%
+  arrange(desc(ave_hz)) %>%
+  mutate(diff_hz = (0.45781055-ave_hz)) # ideally I would modify this to refer directly to the value for atrovirens
+```
+
+S. chrysomelas retains the greatest hz (0.409) whereas S. rubrivinctus has the smallest amount of variation at these markers (0.012).

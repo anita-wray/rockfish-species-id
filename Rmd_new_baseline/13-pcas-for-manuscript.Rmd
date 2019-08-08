@@ -1,0 +1,624 @@
+---
+title: "PCAs for manuscript"
+output: html_notebook
+---
+
+Carlos requested that I make multiple PCAs with the clusters of subgenera for greater legibility, and that I keep the colors consistent throughout.
+
+This also includes the Fst analysis.
+
+I'll do that here.
+
+```{r load-libraries}
+library(tidyverse)
+library(adegenet)
+library("ape")
+library("pegas")
+library(RColorBrewer)
+
+```
+
+## Entire downsampled dataset
+
+Load data for all 54 filtered species
+```{r dataset-genepop}
+dataset1 <- read.genepop("../new_baseline_data/processed/sebastes_final_dataset.gen", ncode = 3)
+
+# set population as a factor
+dataset1@pop <- as.factor(dataset1@pop)
+
+```
+
+### Test HWE
+
+```{r}
+# hw.test in pegas
+# test_hw <- as.loci(dataset1)
+# 
+# practice <- by(test_hw, test_hw$population, hw.test)
+# 
+# (practice.mat <- sapply(practice, "[", i = TRUE, j = 4)) # Take the fourth column with all rows, which is Pr.exact
+```
+
+Test for HWE without permutations
+```{r}
+# dataset1.pop <- seppop(dataset1) %>% lapply(hw.test, B = 0)
+
+```
+
+
+```{r}
+# dataset.mat <- sapply(dataset1.pop, "[", i = TRUE, j = 3) # Take the third column with all rows
+# loci <- rownames(dataset.mat)
+# p_vals <- as.tibble(dataset.mat)
+# loci_names <- as.tibble(loci)
+# hwe_spp <- bind_cols(loci_names, p_vals) %>%
+#   rename(locus = value)
+# 
+# # I could tally how many loci deviate from HWE in each species
+# 
+# # save the table of HWE p-values for all 54 species
+# hwe_spp %>%
+#   write_csv("csv_outputs/HWE_spp_p_values.csv")
+# 
+# # how many loci out of hwe in each species/ which loci are out of hwe in which species
+# hwe_spp %>%
+#   gather(species, value = 2:55, -locus) %>%
+#   rename(pval = `2:55`) %>%
+#   filter(pval < 0.05) %>%
+#   group_by(locus) %>%
+#   tally() %>%
+#   filter(n > 7)
+```  
+
+Which species are most affected by loci that are out of hwe?
+```{r}
+# hwe_spp %>%
+#   gather(species, value = 2:55, -locus) %>%
+#   rename(pval = `2:55`) %>%
+#   filter(pval < 0.05) %>%
+#   group_by(species) %>%
+#   tally() %>%
+#   arrange(desc(n))
+
+```
+
+
+
+
+```{r alpha-plot}
+# alpha  <- 0.05 # set the alpha to 0.05
+# newmat <- dataset.mat
+# newmat[newmat > alpha] <- 1
+# 
+# # now create a simple heatmap to show where there are significant deviations from HWE
+# library("lattice")
+# levelplot(t(newmat))
+
+```
+
+## Checking pairwise Fst
+```{r}
+library(hierfstat)
+
+fst_spp <- pairwise.fst(dataset1, pop = dataset1$pop, res.type = c("matrix"))
+
+fst_summary <- as.tibble(fst_spp)
+pairwise_fst <- rownames(fst_spp) %>%
+  as.tibble() %>%
+  rename(species = value) %>%
+  bind_cols(fst_summary) 
+
+# pairwise_fst %>%
+#   write_csv("csv_outputs/sebastes_spp_pairwise_Fst.csv")
+
+```
+
+Make a distribution plot of Fst values between all pairs of species
+```{r}
+# reformat data
+long_fst <- pairwise_fst %>%
+  gather("pair", "Fst", 2:55, -species) %>%
+  filter(Fst > 0) # get rid of the self-by-self comparisons
+
+# there are a total of 1,425 unique comparisons (the symmetric matix has double that)
+
+just_fst <- long_fst %>%
+  arrange(desc(Fst)) %>%
+  select(Fst) %>%
+  unique()
+
+# what's the mean and SD Fst values?
+just_fst %>%
+  summarise(mean(Fst))
+
+# SD
+just_fst %>%
+  summarise(sd(Fst))
+
+# plot the Fst values as a histogram
+a <- just_fst %>%
+  ggplot(aes(Fst))
+
+a + geom_histogram(binwidth = 0.01) +
+  geom_vline(aes(xintercept = mean(Fst)), 
+             linetype = "dashed", size = 0.6) +
+  theme_bw() +
+  ylab("Count") +
+  xlab("Pairwise Fst") 
+  
+# this figure includes double the number of actual comparisons
+ggsave("pdf_outputs/pairwise_Fst_distribution.pdf", height = 4, width = 6)
+```
+
+Which pairwise comparisons are the highest Fst?
+```{r}
+long_fst %>%
+  filter(Fst > 0.74) %>%
+  group_by(Fst) %>%
+  unique()
+
+```
+
+What are the comparisons among Pteropodus?
+```{r}
+long_fst %>%
+  filter(species %in% c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus") & pair %in% c("chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus")) %>%
+  write_csv("csv_outputs/ptero_fst.csv")
+
+v1 <- long_fst %>%
+  filter(species == "atrovirens" & pair %in% c("chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus"))
+
+v2<- long_fst %>%
+  filter(species == "chrysomelas" & pair %in% c("carnatus", "caurinus", "maliger", "nebulosus"))
+
+v3 <- long_fst %>%
+  filter(species == "carnatus" & pair %in% c("caurinus", "maliger", "nebulosus"))
+
+v4 <- long_fst %>%
+  filter(species == "caurinus" & pair %in% c("maliger", "nebulosus"))
+
+v5 <- long_fst %>%
+  filter(species == "maliger" & pair %in% c("nebulosus"))
+
+bind_rows(v1, v2, v3, v4, v5) %>%
+  arrange(desc(Fst)) %>%
+  write_csv("csv_outputs/pteropodus_fst.csv")
+```
+
+
+
+```{r}
+basic.stats(dataset1, diploid = TRUE)
+```
+
+## calculating linkage disequilibrium
+
+```{r}
+
+```
+
+
+
+
+Make PCA
+```{r dataset-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+datasetX <- tab(dataset1, NA.method="mean")
+
+# make PCA
+dataset_pca1 <- dudi.pca(datasetX, center = TRUE, scannf = FALSE, scale=FALSE, nf = 1000)
+
+# colors
+mycol <- colorRampPalette(c("palegreen", "darkolivegreen", "darkslategrey", "darkgreen", "deepskyblue", "aquamarine4", "seagreen4", "cadetblue", "cyan", "darkblue", "midnightblue", "blue", "dodgerblue", "darkcyan", "darkslateblue", "slateblue", "steelblue4", "skyblue", "paleturquoise4", "brown", "royalblue", "purple4", "orange", "darkorange", "darkgoldenrod", "chocolate", "tan4", "saddlebrown", "sienna", "navajowhite4", "darkgray", "black"))(54)
+
+# plot with factor labels
+pdf("pdf_outputs/final_dataset_pca.pdf", width = 10, height = 10)
+s.class(dataset_pca1$li, fac=pop(dataset1), wt = rep(1, length(pop(dataset1))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(mycol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+
+Amount of variance represented by each principal component
+```{r}
+eigen1 <- as.tibble(dataset_pca1$eig)
+
+total_eigenval <- eigen1 %>%
+  summarise(sum(value))
+
+top32 <- eigen1 %>%
+  top_n(., 32) %>%
+  summarise(sum(value))
+```
+
+
+```{r}
+top32/total_eigenval
+
+```
+77.5% of the total variance is captured in the first 32 eigenvalues.
+
+
+```{r}
+# PC1
+1.712034e+01/total_eigenval
+```
+```{r}
+# PC2
+11.720844/total_eigenval
+```
+
+Using the adegenet manual to describe the PC variance in terms of percentage of the total variance:
+```{r}
+eig.perc <- 100*dataset_pca1$eig/sum(dataset_pca1$eig)
+
+eig.perc
+```
+Great! Same answer. That validates the way I was thinking about the PCA.
+
+Out of curosity, how much variation in the first 10 PCs?
+```{r}
+sum(eig.perc[1:10])
+```
+Beautiful! 50% of the variation is in the first 10 PCs.
+
+
+
+
+I want to keep the colors for each species consistent, so I created an Excel document with that information `sebastes_spp_pca_colors.xlsx` in the sebastes_spp_ID folder.
+```{r}
+  as.tibble(mycol) %>% View
+```
+
+
+## Pteropodus
+
+```{r pteropodus}
+dataset2 <- read.genepop("../new_baseline_data/processed/pteropodus.gen", ncode = 3)
+
+# set population as a factor
+dataset2@pop <- as.factor(dataset2@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+dataset2X <- tab(dataset2, NA.method="mean")
+
+# make PCA
+dataset2_pca <- dudi.pca(dataset2X, scannf = FALSE, center = TRUE, scale = FALSE, nf = 100)
+
+# colors
+mycol2 <- c("#98FB98", "#70A65A", "#4E6634", "#385547", "#1F5634", "#036205" ,"#009281", "#06BAF1", "#2E9BA0", "#3E8B6C", "#318B5B")
+
+# plot with factor labels
+pdf("pdf_outputs/pteropodus_pc1xpc2.pdf", width = 5, height = 5)
+s.class(dataset2_pca$li, fac=pop(dataset2), wt = rep(1, length(pop(dataset2))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(mycol2,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+The closest Pteropodus species are on top of each other: atrovirens, caurinus, chrysomelas, carnatus, maliger, etc.
+
+PC 2 x PC 3 draws out atrovirens, but not the others
+```{r}
+s.class(dataset2_pca$li, fac=pop(dataset2), wt = rep(1, length(pop(dataset2))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=2, yax=3, col=transp(mycol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+```
+
+Let's quickly take a look to see if there are other PCs that do a better job?
+
+## Mean of the values of each PC for Pteropodus
+(based on my work in gopher/black-and-yellow)
+
+```{r}
+# turn df into a tibble,
+# sort by the species groups, and then 
+
+ptero_data <- rownames_to_column(dataset2_pca$li, var = "id") 
+ptero_pop <- as.tibble(dataset2@pop) %>%
+  rename(species = value)
+
+# calculate the mean
+pc_means <- bind_cols(ptero_pop, ptero_data) %>%
+  group_by(species) %>%
+  summarise_all(funs(mean)) %>%
+  select(-id)
+
+pc_means
+```
+
+So then I want to plot those means on the y-axis and have PC on the x-axis.
+
+```{r}
+mean_df <- pc_means %>%
+  gather(pc, mean, 3:101)
+
+# rename the Axis to just the PC number
+mean_df$pc <- str_replace(mean_df$pc, "Axis", "")
+mean_df$pc <- as.numeric(mean_df$pc)
+```
+
+```{r means-plot}
+mean_df %>%
+  ggplot() +
+  geom_point(aes(x = pc, y = mean, color = species)) +
+  theme_bw()
+
+#ggsave("pdf_outputs/pteropodus_pc_means.pdf")
+```
+
+Try making a dataset with just the tightest cluster from Pteropodus:
+
+# Pteropodus subset
+
+```{r}
+ptero_sub <- read.genepop("../new_baseline_data/processed/pteropodus_subset.gen", ncode = 3)
+
+# set population as a factor
+ptero_sub@pop <- as.factor(ptero_sub@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+ptero_subX <- tab(ptero_sub, NA.method="mean")
+
+# make PCA
+ptero_sub_pca <- dudi.pca(ptero_subX, scannf = FALSE, center = TRUE, scale = FALSE, nf = 10)
+
+# colors
+ptero_mycol <- c("#98FB98", "#70A65A", "#4E6634", "#385547", "#1F5634", "#009281", "#06BAF1", "#2E9BA0")
+
+# plot with factor labels
+pdf("pdf_outputs/ptero_sub_pca.pdf", width = 5, height = 5)
+s.class(ptero_sub_pca$li, fac=pop(ptero_sub), wt = rep(1, length(pop(ptero_sub))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(ptero_mycol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+```
+
+Pteropodus subset v2
+```{r}
+ptero_sub2 <- read.genepop("../new_baseline_data/processed/pteropodus_subset_v2.gen", ncode = 3)
+
+# set population as a factor
+ptero_sub2@pop <- as.factor(ptero_sub2@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+ptero_sub2X <- tab(ptero_sub2, NA.method="mean")
+
+# make PCA
+ptero_sub2_pca <- dudi.pca(ptero_sub2X, scannf = FALSE, center = TRUE, scale = FALSE, nf = 10)
+
+# colors
+ptero2_mycol <- c("#98FB98", "#70A65A", "#4E6634", "#385547", "#1F5634")
+
+# plot with factor labels
+pdf("pdf_outputs/ptero_subset_v2.pdf", width = 5, height = 5)
+s.class(ptero_sub2_pca$li, fac=pop(ptero_sub2), wt = rep(1, length(pop(ptero_sub2))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(ptero2_mycol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+
+
+
+## Sebastomus
+
+read in a genepop file with just those species overlapping in the middle of the plot
+```{r}
+dataset3 <- read.genepop("../new_baseline_data/processed/sebastomus.gen", ncode = 3)
+
+# set population as a factor
+dataset3@pop <- as.factor(dataset3@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+dataset3X <- tab(dataset3, NA.method="mean")
+
+# make PCA
+dataset3_pca <- dudi.pca(dataset3X, scannf = FALSE, center = TRUE, scale = FALSE, nf = 10)
+
+# colors
+sebtocol <- c("#439376", "#5D9FA1", "#25D8D9", "#00CEE9", "#0039A5", "#080881", "#0B0BBB", "#5F5CBF", "#406198", "#548CAF", "#FF9000", "#8B4615","#954B1F", "#9E5430", "#0310FF", "#8B5323")
+
+# plot with factor labels
+pdf("pdf_outputs/sebastomus_pca.pdf", width = 8, height = 8)
+s.class(dataset3_pca$li, fac=pop(dataset3), wt = rep(1, length(pop(dataset3))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(sebtocol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+To get better resolution, I'll look at two separate clusters in this group.
+
+## Sebastomus cluster 1
+
+This is a subset of the above group that needs additional separation.
+
+```{r sebastomus-cluster1-genepop}
+sebastomus1 <- read.genepop("../new_baseline_data/processed/sebastomus_cluster1.gen", ncode = 3)
+
+# set population as a factor
+sebastomus1@pop <- as.factor(sebastomus1@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+sebastomus1X <- tab(sebastomus1, NA.method="mean")
+
+# make PCA
+sebastomus1_pca <- dudi.pca(sebastomus1X, scannf = FALSE, center = TRUE, scale = FALSE, nf = 10)
+
+# colors
+seb1col <- c("#00CEE9", "#0039A5", "#080881", "#171771", "#0B0BBB", "#0310FF", "#5F5CBF")
+
+# plot with factor labels
+pdf("pdf_outputs/sebastomus_cluster1_pc2x3.pdf", width = 5, height = 5)
+s.class(sebastomus1_pca$li, fac=pop(sebastomus1), wt = rep(1, length(pop(sebastomus1))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=2, yax=3, col=transp(seb1col,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+```
+
+## Sebastomus cluster 2
+This one includes:
+aleutianus, melanostictus, ruberrimus, polyspinis, and pinniger
+```{r sebastomus-cluster2}
+sebastomus2 <- read.genepop("../new_baseline_data/processed/sebastomus_cluster2.gen", ncode = 3)
+
+# set population as a factor
+sebastomus2@pop <- as.factor(sebastomus2@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+sebastomus2X <- tab(sebastomus2, NA.method="mean")
+
+# make PCA
+sebastomus2_pca <- dudi.pca(sebastomus2X, scannf = FALSE, center = TRUE, scale = FALSE, nf = 10)
+
+# colors
+seb_c2col <- c("#25D8D9", "#FF9000", "#954B1F", "#9E5430", "#8B5323")
+
+# plot with factor labels
+pdf("pdf_outputs/sebastomus_cluster2_pca.pdf", width = 5, height = 5)
+s.class(sebastomus2_pca$li, fac=pop(sebastomus2), wt = rep(1, length(pop(sebastomus2))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(seb_c2col,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+```
+
+
+## Sebastosomus
+
+read in a genepop file
+```{r}
+dataset4 <- read.genepop("../new_baseline_data/processed/sebastosomus.gen", ncode = 3)
+
+# set population as a factor
+dataset4@pop <- as.factor(dataset4@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+dataset4X <- tab(dataset4, NA.method="mean")
+
+# make PCA
+dataset4_pca <- dudi.pca(dataset4X, scannf = FALSE, center = TRUE, scale = FALSE, nf = 10)
+
+# colors
+mycol <- c("#863D61", "#4C61CC", "#4A43B8", "#5E2183", "#C27331", "#FF9F00")
+
+# plot with factor labels
+pdf("pdf_outputs/sebastosomus_pca.pdf", width = 8, height = 8)
+s.class(dataset4_pca$li, fac=pop(dataset4), wt = rep(1, length(pop(dataset4))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(mycol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+
+
+
+
+## Sebastodes
+
+Maybe having smaller groups of species will help?
+```{r sebastodes-genepop}
+dataset5 <- read.genepop("../new_baseline_data/processed/sebastodes.gen", ncode = 3)
+
+# set population as a factor
+dataset5@pop <- as.factor(dataset5@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+dataset5X <- tab(dataset5, NA.method="mean")
+
+# make PCA
+dataset5_pca <- dudi.pca(dataset5X, scannf = FALSE, center = TRUE, scale = FALSE, nf = 10)
+
+# colors
+seb2col <- c("#83CAE7", "#6E7E7E", "#934545", "#E28904")
+
+# plot with factor labels
+pdf("pdf_outputs/sebastodes_pca.pdf", width = 5, height = 5)
+s.class(dataset5_pca$li, fac=pop(dataset5), wt = rep(1, length(pop(dataset5))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(seb2col,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+```
+
+
+## Eosebastes
+
+species in this PCA include:
+melanostomus
+reedi
+crameri
+rufus
+ovalis
+```{r eosebastes-genepop}
+eosebastes <- read.genepop("../new_baseline_data/processed/eosebastes.gen", ncode = 3)
+
+# set population as a factor
+eosebastes@pop <- as.factor(eosebastes@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+eosebastesX <- tab(eosebastes, NA.method="mean")
+
+# make PCA
+eosebastes_pca <- dudi.pca(eosebastesX, scannf = FALSE, center = TRUE, scale = FALSE, nf = 10)
+
+# colors
+eo_col <- c("#493E8D", "#5D4FB4", "#C67515", "#C7661F", "#9D5D27")
+
+# plot with factor labels
+pdf("pdf_outputs/eosebastes_pca.pdf", width = 5, height = 5)
+s.class(eosebastes_pca$li, fac=pop(eosebastes), wt = rep(1, length(pop(eosebastes))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(eo_col,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+```
+
+
+## Can I filter the original genind object or data?
+
+```{r}
+dataset_pcs <- as.tibble(dataset_pca1$li)
+dataset_pops <- as.tibble(dataset1@pop) %>%
+  rename(species = value)
+
+full_tbl <- bind_cols(dataset_pops, dataset_pcs)
+```
+
+
+```{r}
+full_tbl %>%
+  filter(species %in% c("atrovirens", "carnatus", "chrysomelas", "maliger", "nebulosus")) %>%
+  ggplot(aes(x = Axis1, y = Axis2, color = species)) +
+  geom_point()
+  
+```
+That doesn't look good.
+
+
+## Mismash
+
+This group includes species from multiple subgenera...
+```{r}
+dataset6 <- read.genepop("../new_baseline_data/processed/mismash.gen", ncode = 3)
+
+# set population as a factor
+dataset6@pop <- as.factor(dataset6@pop)
+
+# Allele presence absence data are extracted and NAs replaced using tab:
+dataset6X <- tab(dataset6, NA.method="mean")
+
+# make PCA
+dataset6_pca <- dudi.pca(dataset6X, scannf = FALSE, center = TRUE, scale = FALSE, nf = 10)
+
+# colors
+mashcol <- c("#1464FF","#158EDE", "#038B9A", "#20678B", "#B9860A")
+
+# plot with factor labels
+pdf("pdf_outputs/mismash_pca.pdf", width = 5, height = 5)
+s.class(dataset6_pca$li, fac=pop(dataset6), wt = rep(1, length(pop(dataset6))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(mashcol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+```
+
+

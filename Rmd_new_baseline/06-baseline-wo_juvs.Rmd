@@ -1,0 +1,429 @@
+---
+title: "just adults"
+output: html_notebook
+---
+
+Now that the meta data is organized, I can pretty clearly see that some of the issues are caused by juvenile samples.
+
+Let's re-run the analysis with them removed, as a test case.
+
+Load libraries and data
+```{r}
+library(tidyverse)
+library(rubias)
+
+# meta data
+meta <- readRDS("../new_baseline_data/processed/meta-data-tibble.rds")
+
+# genotype data in 2-column format for rubias
+new2col <- read_csv("csv_outputs/new2col.csv")
+```
+
+How many of those are juveniles?
+```{r}
+juvies <- new2col %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  filter(REPORTED_LIFE_STAGE == "JUVENILE") %>%
+  select(collection, indiv) %>%
+  unique()
+
+juv_samples <- juvies %>%
+  group_by(collection) %>%
+  tally() %>%
+  rename(juv_samples = n)
+```
+There are 160 juvenile samples
+
+If I remove samples that are juveniles, what are my numbers per species?
+```{r}
+new2col %>%
+  semi_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  #anti_join(., juvies, by = "indiv") %>%
+  group_by(collection) %>%
+  tally() %>%
+  rename(total_samples = n) %>%
+  left_join(., juv_samples, by = "collection") %>%
+  mutate(remaining_samples = total_samples-juv_samples) %>%
+  arrange(remaining_samples)
+
+```
+We lose reedi and wilsoni when we exclude juveniles, and drop down to just 2 samples of crameri and five of serriceps.
+
+However, generally including juveniles is a bad idea. So here's what I'll do: For any species for which we end up with fewer than 5 samples, I will include juveniles up to that number.
+
+```{r}
+# just juvenile samples for these three species
+juvs_to_keep <- new2col %>%
+  ungroup() %>%
+  filter(collection %in% c("reedi", "wilsoni", "crameri")) %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  group_by(collection) %>%
+  filter(REPORTED_LIFE_STAGE == "JUVENILE") %>%
+  select(1:184)
+
+```
+
+Now that I have those samples selected, I can remove all juvenile samples and put back those from the `juvs_to_keep`
+```{r}
+dataset <- new2col %>%
+  ungroup() %>%
+  anti_join(juvies) %>%
+  bind_rows(juvs_to_keep)
+
+dataset %>%
+  group_by(repunit) %>%
+  tally() %>%
+  arrange(n) %>%
+  write_csv("csv_outputs/dataset_spp_wo_juvs.csv")
+  
+```
+
+Keeping just the juveniles from those three species, we have a total of 1,534 samples from 54 species.
+
+
+Let's try out the self-assignment with that dataset:
+```{r}
+minus_juvs_selfass <- self_assign(dataset, gen_start_col = 5)
+
+```
+
+What I'm really curious about is whether that cleaned up some of the z-score issues?
+```{r}
+# which samples still have z-score issues 
+z_bummers <- minus_juvs_selfass %>%
+  ungroup() %>%
+  filter(scaled_likelihood > 0.95) %>%
+  filter(z_score < -3) %>%
+  select(indiv, collection, inferred_collection, z_score, scaled_likelihood, n_miss_loci) %>%
+  arrange(z_score) 
+
+z_bummers
+```
+13 samples with z-scores < -3.
+
+If the average amount of missing data is ~6% (5.5 loci), then the samples with 9, 11, and 13 missing loci are potentially significant, but missing data doesn't explain the hopkinsi samples.
+
+Although I poked around to figure out what was causing the low z-scores, utimately, I should just remove them. (unless that is too circular, but for the reference baseline, we'll go ahead because it might be some indication that the samples are not what they should be based on meta data.)
+```{r}
+d2 <- dataset %>%
+  ungroup() %>%
+  anti_join(., z_bummers, by = "indiv")
+
+d2 
+```
+Removing samples with z-scores < -3 leaves 1,521 samples.
+
+Try self-assignment again without those 
+```{r}
+assign2 <- self_assign(d2, gen_start_col = 5)
+```
+
+What's the proportion correctly assigned now?
+```{r}
+assign2 %>%
+  ungroup() %>%
+  filter(scaled_likelihood > 0.95) %>%
+  filter(collection == inferred_collection)
+```
+
+```{r}
+1457/1521
+```
+98% assigned correctly at the 50% level
+96% assigned correctly at the 99% level
+
+Are all of the misassignments gopher/black-and-yellow?
+
+```{r}
+assign2 %>%
+  filter(collection != inferred_collection) %>%
+  filter(scaled_likelihood > 0.5)
+```
+Yes. All of the misassignments are gopher/black-and-yellow.
+
+## Make a single repunit for the gopher/black-and-yellow samples
+
+```{r}
+# change the carnatus reporting unit to chrysomelas
+gby_repu <- d2 %>%
+  mutate(repunit = ifelse(repunit == "carnatus", "gby", repunit)) %>%
+  mutate(repunit = ifelse(repunit == "chrysomelas", "gby", repunit)) %>%
+  mutate(collection = ifelse(collection == "carnatus", "gby", repunit)) %>%
+  mutate(collection = ifelse(collection == "chrysomelas", "gby", repunit))
+
+# confirm that the repunit is changed but the collection is not.
+gby_repu %>%
+  filter(collection == "carnatus")
+```
+
+Try self-assignment with that
+```{r}
+assign3 <- self_assign(gby_repu, gen_start_col = 5)
+```
+
+Accurate assignment?
+```{r}
+assign3 %>%
+  filter(scaled_likelihood > 0.95) %>%
+  filter(repunit == inferred_repunit)
+```
+100% at the 0.95 likelihood level
+
+
+Well, either I switch the collection information, in which case, I have 100% assignment, or I move forward with the lower accuracy.
+
+But I think it's more appropriate to keep the collections intact?
+Maybe I will describe it both ways in the manuscript:
+
+When carnatus and chrysomelas are individual collections with the ability to assign to a single reporting unit, 96.4% of assignments are accurate at a 95% likelihood threshold. 
+
+When carnatus and chrysomelas are considered a single collection (gby), we attain 100% accuracy in assignments at the 95% likelihood threshold.
+
+## Downsample
+
+What if I take a maximum of 32 samples per species?
+
+```{r downsample}
+# which species have fewer than 32 samples?
+sm_grps <- d2 %>%
+  group_by(collection) %>%
+  tally() %>%
+  arrange(n) %>%
+  filter(n < 33)
+
+# make a 2-col dataframe with just those groups
+sm_d2 <- d2 %>%
+  semi_join(., sm_grps) %>%
+  ungroup()
+
+# which species have more than 32 samples?
+lrg_grps <- d2 %>%
+  group_by(collection) %>%
+  tally() %>%
+  arrange(n) %>%
+  filter(n > 32)
+  
+# downsample those groups
+down_sam <- d2 %>%
+  semi_join(., lrg_grps) %>%
+  group_by(collection) %>%
+  sample_n(., 32, replace = FALSE) %>%
+  ungroup()
+
+# and add the data from the other groups back into the dataframe
+down_data <- sm_d2 %>%
+  bind_rows(down_sam) #%>%
+  # group_by(collection) %>%
+  # tally() %>%
+  # arrange(desc(n))
+
+```
+
+Great. that downsampling worked. There are 1,005 samples from 54 species.
+Now do the self-assignment:
+```{r}
+assign_down <- self_assign(down_data, gen_start_col = 5)
+```
+
+What's our accuracy?
+```{r}
+assign_down %>%
+  filter(repunit == inferred_repunit) %>%
+  filter(scaled_likelihood > 0.95)
+```
+
+```{r}
+979/1005
+```
+
+
+z-scores?
+```{r}
+z_to_remove <- assign_down %>%
+  filter(scaled_likelihood > 0.5) %>%
+  filter(z_score < -3)
+```
+
+Damn. There are still three samples, all of which are the hopkinsi. I should remove them because (as seen in the PCA) they are clearly wonky somehow (done in `08-pca-w-downsampled-dataset.Rmd`)
+
+I think I should move forward with this downsampled dataset because a general reference baseline doesn't need 200 samples of kelp rockfish and carrying around those genotypes is cumbersome. 
+
+Remove those last four samples with wonky z-scores:
+```{r}
+down_no_z_data <- down_data %>%
+  anti_join(., z_to_remove)
+```
+In this dataset there are 1002 total samples.
+
+Output dataset for figures and other analyses:
+```{r outputs}
+dat3 <- down_no_z_data %>%
+  ungroup() %>%
+  select(-repunit, -sample_type) %>%
+  mutate(sample = paste0(collection, indiv)) %>%
+  select(183, 1:182)
+  # need to reorder the collections to be in phylogenetic order
+```
+
+```{r}
+# set the levels explicitly
+dat3$collection <- factor(dat3$collection, levels = c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "semicinctus", "elongatus", "miniatus", "pinniger", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "ensifer", "babcocki", "nigrocinctus", "rubrivinctus", "serriceps", "rufus", "ovalis", "hopkinsi", "rufinanus", "moseri", "jordani", "paucispinis", "goodei", "levis", "entomelas", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "diploproa", "melanostomus", "reedi", "crameri", "polyspinis", "alutus", "melanostictus", "aleutianus", "emphaeus", "wilsoni", "zacentrus", "proriger", "borealis"))
+
+ordered_frame <- with(dat3, dat3[order(collection),])
+
+ordered_frame %>%
+  select(-collection, -indiv) %>%
+  write_csv("csv_outputs/ordered_downsampled_sppID_data.csv")
+```
+
+
+When we do the self-assignment on this dataset, we get:
+```{r}
+assign4 <- self_assign(down_no_z_data, gen_start_col = 5)
+```
+
+assignment accuracy?
+```{r}
+assign4 %>%
+  filter(scaled_likelihood > 0.95)
+```
+```{r}
+986/1002
+```
+98.4% assigned correctly at the 95% likelihood threshold.
+
+"incorrectly" assigned.
+```{r}
+assign4 %>%
+  filter(scaled_likelihood > 0.5 & scaled_likelihood < 0.95) %>%
+  ungroup()
+```
+
+Summary:
+In this dataset, there are 1002 samples and 54 species. They are all adults with the exception of 47 juvenile samples included for crameri, wilsoni, and reedi.
+
+I removed a total of 16 samples because of z-score < -3, half of which were hopkinsi, followed by 2 carnatus and 1 each of flavidus, levis, melanops, nigrocinctus, ovalis, and umbrosus.
+```{r z-sample-summary}
+z_bummers %>%
+  bind_rows(z_to_remove) %>%
+  group_by(collection) %>%
+  tally %>%
+  arrange(desc(n))
+```
+
+
+```{r juvs-kept-summary}
+down_no_z_data %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  select(indiv, collection, REPORTED_LIFE_STAGE) %>%
+  filter(REPORTED_LIFE_STAGE == "JUVENILE") %>%
+  unique()
+```
+
+
+
+
+
+## Hopkinsi investigation
+
+```{r}
+# closer look at hopkinsi
+minus_juvs_selfass %>%
+  filter(scaled_likelihood > 0.5) %>%
+  #filter(z_score < -3) %>%
+  #select(indiv, collection, inferred_collection, z_score, scaled_likelihood, n_miss_loci) %>%
+  filter(collection == "hopkinsi") %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  select(indiv, REPORTED_LIFE_STAGE, COLLECTION_DATE, SAMPLE_COMMENTS)
+```
+
+What if I have sibling groups in my hopkinsi data?
+Are the "larvae" the hopkinsi samples with low z-scores?
+```{r}
+minus_juvs_selfass %>%
+  filter(scaled_likelihood > 0.5) %>%
+  filter(z_score < -3) %>%
+  #select(indiv, collection, inferred_collection, z_score, scaled_likelihood, n_miss_loci) %>%
+  filter(collection == "hopkinsi") %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  select(indiv, z_score, COLLECTION_DATE, SAMPLE_COMMENTS)
+```
+Yes. Not totally sure what to make of this.
+
+Make a list of those samples to investigate this elsewhere:
+```{r}
+# closer look at hopkinsi
+hopkinsi <- minus_juvs_selfass %>%
+  filter(scaled_likelihood > 0.5) %>%
+  #filter(z_score < -3) %>%
+  #select(indiv, collection, inferred_collection, z_score, scaled_likelihood, n_miss_loci) %>%
+  filter(collection == "hopkinsi") %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) #%>%
+  # select(indiv) %>%
+  # rename(NMFS_DNA_ID = indiv)
+
+#write_csv(hopkinsi, "csv_outputs/hopkinsi_samples.csv")
+
+```
+
+## Here's another thought:
+Take a look at the meta data notes to see if the term "larvae" comes up more than just in the hopkinsi
+
+```{r}
+try2 %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  select(SAMPLE_COMMENTS, REPORTED_LIFE_STAGE, COLLECTION_DATE) %>%
+  filter(!is.na(SAMPLE_COMMENTS)) %>%
+  filter(SAMPLE_COMMENTS != "Already extracted DNA.") %>%
+  filter(SAMPLE_COMMENTS != "Already extracted DNA plate.") 
+  
+```
+
+```{r}
+meta %>%
+    filter(!is.na(SAMPLE_COMMENTS)) %>%
+  left_join(., try2, by = c("NMFS_DNA_ID" = "indiv")) %>%
+  filter(collection == "hopkinsi")
+  
+```
+
+It's pretty ambiguous whether the samples are from adults (females) who had larvae, or if the samples were larvae themselves and shoud not be included. 
+
+For a moment, let's assume that the samples that say "Larvae" are referring to a female who has larvae.
+
+But if sample `R010389` says "Genotype identical to R010388", then I should make sure I do a matching samples analysis. 
+
+
+## Hopkinsi for COLONY
+
+Grab the hopkinsi data for COLONY input
+
+```{r}
+new2col %>%
+  filter(collection == "hopkinsi") %>%
+  select(-sample_type, -repunit, -collection) %>%
+  write_csv("csv_outputs/hopkinsi_genos.csv")
+```
+
+And read in the output (with the caveat that we probably don't have the power to actually distinguish sibs - low hz)
+```{r}
+sibs <- read_csv("../new_baseline_data/hopkinsi_colony_data/hopkinsi_for_sppID.BestCluster.csv")
+
+# only the high-probability sibs
+sibs %>%
+  filter(Probability > 0.95)
+```
+Based on that, it looks like there is one pair of sibs and one group of four full-sibs.
+
+How do those compare to the hopkinsi samples that had the z-scores?
+
+```{r}
+hopk_sibs <- sibs %>%
+  filter(Probability > 0.95) %>%
+  filter(ClusterIndex %in% c(2, 3)) %>%
+  left_join(., hopkinsi, by = c("OffspringID" = "indiv")) %>%
+  select(ClusterIndex, OffspringID, z_score, SAMPLE_COMMENTS) %>%
+  select(OffspringID) %>%
+  rename(indiv = OffspringID)
+```
+

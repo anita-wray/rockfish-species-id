@@ -1,0 +1,34 @@
+---
+title: "weird squarespots"
+output: html_notebook
+---
+
+Something strange is happening with the squarespot rockfish samples:
+First, five samples had very low (< -3) z-scores, despite assigning to hopkinsi, and then the metadata for most of the hopkinsi samples says that they are "ADULT" under REPORTED_LIFE_STAGE, but that they are "Larvae, Transferred by hand during extraction process" under the sample comments.
+
+This makes me wonder if these are actually larvae and actually siblings?
+
+Probably the easiest approach is to remove them from the baseline, assuming that I have enough samples of hopkinsi to be relatively unaffected.
+
+
+```{r}
+library(tidyverse)
+```
+
+grab the genotype data for just the hopkinsi samples
+```{r}
+# genotypes
+genos <- readRDS("../new_baseline_data/processed/called_genos_na_explicit.rds")
+
+# list of hopkinsi samples
+hops <- read_csv("csv_outputs/hopkinsi_samples.csv")
+```
+
+```{r}
+genos %>%
+  right_join(., hops, by = "NMFS_DNA_ID")
+```
+
+Or best to do it in COLONY, assuming these are groups of siblings (larvae).
+
+

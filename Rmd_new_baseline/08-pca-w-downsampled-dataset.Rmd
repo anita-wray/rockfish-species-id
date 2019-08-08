@@ -1,0 +1,79 @@
+---
+title: "PCA with downsampled dataset"
+output: html_notebook
+---
+
+```{r load-libraries}
+library(tidyverse)
+library(adegenet)
+library("ape")
+library("pegas")
+library(RColorBrewer)
+library(wordcloud) # for non-overlapping labels
+
+# two_col2 <- read_csv("csv_outputs/sebastes_spp_baseline_two_col.csv")
+```
+
+Read in genepop-formatted data from `06-baseline-wo_juvs.Rmd`
+```{r}
+genepop_ds <- read.genepop("../new_baseline_data/processed/sebastes_downsampled_zscore_genepop3d.gen", ncode = 3)
+```
+
+make a basic PCA following the adegenet tutorial
+```{r}
+# Allele presence absence data are extracted and NAs replaced using tab:
+ds_rock <- tab(genepop_ds, NA.method="mean")
+
+# make PCA
+rock.pca <- dudi.pca(ds_rock,scannf=FALSE,scale=FALSE)
+
+# plot PCA
+#pdf("pdf_outputs/downsampled_sebastes_pca.pdf", width = 10, height = 10)
+colorplot(rock.pca$li, rock.pca$li, transp=TRUE, cex=2, font=5, xlab="PC 1", ylab="PC 2")
+abline(v=0,h=0,col="grey", lty=2)
+#dev.off()
+
+# rather than a colorplot, let's do a labeled PCA
+?s.class
+
+# version 1
+s.class(rock.pca$li, fac=pop(genepop_ds), col=funky(54))
+
+# version 2
+pdf("pdf_outputs/downsampled_sebastes_pca.pdf", width = 10, height = 10)
+s.class(rock.pca$li, fac=pop(genepop_ds),
+        col=transp(funky(54), 0.7),
+        axesel=FALSE, cstar = 0.8, cpoint = 3, clabel = 1)
+dev.off()
+```
+
+## New PCA Fst summary stats
+Maybe to be used for ascertainment bias stuff?
+
+```{r}
+library("hierfstat")
+
+fstat(genepop_ds)
+```
+
+## why isn't hierfstat working with my rockfish-only data?
+```{r}
+basic.stats(genepop_ds, digits = 6)
+```
+
+
+
+```{r}
+matFst <- pairwise.fst(genepop_ds,res.type="matrix")
+```
+
+
+And then the boxplot
+```{r}
+pdf("pdf_outputs/downsampled_fst_boxplot.pdf", height = 10, width = 10)
+  temp <- matFst
+  diag(temp) <- NA
+  boxplot(temp, col=funky(nPop(genepop_ds)), las=3,
+          xlab="Species", ylab="Fst")
+dev.off()
+```

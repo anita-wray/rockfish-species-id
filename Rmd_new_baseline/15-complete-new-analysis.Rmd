@@ -1,0 +1,1244 @@
+---
+title: "complete analysis (without contaminated samples)"
+output: html_notebook
+---
+
+Turns out the 8 hopkinsi samples that we ultimately removed were actually contaminated. I will check on the four rosaceus samples as well that looked fishy in the structure plot.
+
+Then I want to do a full analysis similar to `10-complete-downsamp-self-ass..` without these contaminated samples.
+
+NOTE: Fst analysis is in `13-pcas-for-manuscript.Rmd`.
+
+Read in data and libraries
+```{r}
+library(tidyverse)
+library(rubias)
+library(CKMRsim) # add this for the index markers function
+
+# genotypes
+genos <- readRDS("../new_baseline_data/processed/called_genos_na_explicit.rds") %>% 
+  filter(!str_detect(NMFS_DNA_ID, "N")) # remove Lorne's ambiguous yelloweye samples
+
+labels <- readRDS("../new_baseline_data/processed/label-tibble.rds")
+samples <- readRDS("../new_baseline_data/processed/sample-sheet-tibble.rds")
+
+# meta data
+meta <- readRDS("../new_baseline_data/processed/meta-data-tibble.rds") %>%
+  select(1,8,13,22) %>% # just the relevant columns for now
+  mutate(REPORTED_LIFE_STAGE = ifelse(REPORTED_LIFE_STAGE == "Adult", "ADULT", REPORTED_LIFE_STAGE)) %>%   # make the syntax consistent
+   mutate(REPORTED_LIFE_STAGE = ifelse(REPORTED_LIFE_STAGE == "Juvenile", "JUVENILE", REPORTED_LIFE_STAGE)) %>%
+  mutate(REPORTED_LIFE_STAGE = ifelse(is.na(REPORTED_LIFE_STAGE), "UNKNOWN", REPORTED_LIFE_STAGE)) # be explict about NAs
+
+# there are thousands of nmfs ids with two metadata entries
+# remove duplicates
+meta <- meta %>%
+  distinct()
+  
+# make the gtseq run a consistent data type
+labels$gtseq_run <- as.integer(labels$gtseq_run)
+
+```
+
+Remove contaminated hopkinsi
+```{r hopkinsi-to-remove}
+# nmfs ids for those contaminated fish
+hopis <- c("R010376", "R010374", "R010377", "R010375", "R010372", "R010370", "R010371", "R010373")
+hopkis <- as.tibble(hopis) %>%
+  rename(NMFS_DNA_ID = value)
+
+# remove those ids from the genos file
+genos <- genos %>% 
+  anti_join(., hopkis)
+```
+
+
+There are some species names that need to be modified because there is the "S" for Sebastes in front of the name:
+```{r}
+# make species labels consistent
+labels1 <- labels %>%
+  mutate(species = ifelse(grepl("S", species), (gsub("S", "", species)), species))
+
+```
+Excluding marmoratus, that leaves 58 species (which one wasn't included in future analyses? Probably brevispinis)
+
+Now join the data
+```{r}
+# I can join these datasets by gtseq run and id
+genos_spp <- labels1 %>%
+  left_join(., genos, by = c("id", "gtseq_run")) %>%
+  select(gtseq_run, id, species, everything())
+
+# how many samples?
+genos_spp %>%
+  select(id, gtseq_run) %>%
+  unique()
+```
+1,898 samples (but these are not wholly unique - some are duplicates from different sequencing runs).
+
+With the species information tacked on, I should be able to organize my data table for self-assignment using rubias.
+
+## Some initial filters
+
+### Take highest read-depth call for multiply-genotyped DNA_IDs
+
+I'm not sure if there are any of these, but best to leave it in here...
+
+Now, here is a harder operation: if an individual is multiply-genotyped, take the
+genotype with the highest total read depth.  
+```{r take-just-one}
+# slow-ish function to get the total read depth column
+tdepth <- function(a, d) {
+  if(any(is.na(a))) {
+    return(NA)
+  }
+  if(a[1]==a[2]) {
+    return(d[1])
+  } else {
+    return(d[1] + d[2])
+  }
+  
+}
+# this takes the highest read-depth instance of each duplicately-genotyped individual.
+geno_one_each <- genos_spp %>%
+  group_by(NMFS_DNA_ID, species, locus, gtseq_run) %>%
+  mutate(total_depth = tdepth(allele, depth)) %>%
+  ungroup() %>%
+  arrange(NMFS_DNA_ID, species, locus, total_depth, gtseq_run, depth) %>%
+  group_by(NMFS_DNA_ID, species, locus) %>%
+  mutate(rank = 1:n()) %>% 
+  #ungroup() %>%
+  filter(rank <= 2) %>%
+  filter(!is.na(NMFS_DNA_ID)) # remove the samples from Lorne without IDs
+  
+
+# how many samples now?
+geno_one_each %>%
+  group_by(NMFS_DNA_ID) %>%
+  select(gtseq_run, id, species, NMFS_DNA_ID) %>%
+  unique() %>%
+  tally() %>%
+  arrange(desc(n))
+```
+Seven NMFS_DNA_IDs occur twice - so we narrowed those duplicates down for a total of 1,787 samples (after removing the 8 contaminated hopkinsi).
+
+```{r}
+geno_one_each %>%
+  group_by(NMFS_DNA_ID) %>%
+  select(species, NMFS_DNA_ID) %>%
+  unique() %>%
+  ungroup() %>%
+  group_by(species) %>%
+  tally() %>%
+  arrange(desc(n))
+```
+59 species?!
+Again, still including marmoratus and brevispinis.
+I exclude brevispinis later, along with helvomaculatus and simulator, so I will remove marmoratus now.
+
+```{r}
+# remove the genotypes for Scorpaenichthys marmoratus
+geno_one_each2 <- geno_one_each %>%
+  filter(species != "marmoratus")
+```
+
+Total number of samples for manuscript:
+```{r}
+geno_one_each2 %>%
+  ungroup() %>%
+  select(NMFS_DNA_ID) %>%
+  unique()
+```
+1,785 samples.
+
+species affiliations:
+```{r}
+spp_tally <- geno_one_each2 %>%
+  ungroup() %>%
+  select(NMFS_DNA_ID, species) %>%
+  unique() %>%
+  ungroup() %>%
+  group_by(species) %>%
+  tally() %>%
+  arrange(desc(n)) 
+
+spp_tally %>%
+  write_csv("csv_outputs/58species_tally_for_manuscript.csv")
+```
+58 species with the following number of samples per species
+
+
+### Remove the 6 loci which Hayley has been removing
+
+How much missing data at the six loci?
+```{r}
+# to_remove %>%
+#   ungroup() %>%
+#   left_join(geno_one_each2) %>%
+#   select(locus, species, NMFS_DNA_ID, allele) %>%
+#   filter(is.na(allele)) %>%
+#   unique() %>%
+#   group_by(locus, species) %>%
+#   tally() %>%
+#   select(locus, species) %>%
+#   ungroup() %>%
+#   group_by(locus) %>%
+#   tally()
+
+```
+
+
+
+
+```{r remove-loci}
+# read in a list of the 6 loci
+to_remove <- read_csv("../data/loci_to_remove.csv")
+
+# only keep the loci that are not those 6
+keepers <- geno_one_each2 %>%
+  anti_join(., to_remove, by = "locus")
+
+# that should leave 90 loci  
+```
+
+### Toss out indivs with missing data at more than 25 loci
+Now, toss out any individual with fewer than 65 non-missing loci
+```{r toss-missers}
+no_hi_missers <- keepers %>% 
+  group_by(NMFS_DNA_ID, gtseq_run) %>%
+  filter(sum(!is.na(allele)) >= (65*2))
+```
+So, we started with `r length(unique(geno_one_each$NMFS_DNA_ID))` 
+and after filtering out indivs with fewer than 65 genotyped loci, we were left with 
+`r length(unique(no_hi_missers$NMFS_DNA_ID))` individuals.  Those are the ones that
+we will run through rubias to identify to species.
+
+1787 down to 1649 after removing individuals with too much missing data.
+Write a file with the species affiliations for the samples at this stage:
+```{r}
+# modify the sample column 
+spp_tally <- spp_tally %>%
+  rename(n_genotyped = n)
+```
+
+```{r}
+# post-filtering samples
+spp_tally2 <- no_hi_missers %>%
+  ungroup() %>%
+  select(species, NMFS_DNA_ID) %>%
+  unique() %>%
+  group_by(species) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  rename(post_filter = n) %>%
+  right_join(., spp_tally) %>%
+  select(species, n_genotyped, post_filter)
+```
+
+Make integers out of the alleles
+```{r}
+rock2 <- no_hi_missers %>% 
+  dplyr::select(NMFS_DNA_ID, locus, allele) %>%
+  mutate(Chrom = "GTseq") %>% 
+  mutate(Pos = as.integer(factor(locus, levels = unique(locus)))) %>%
+  dplyr::rename(Locus = locus,
+         Allele = allele) %>%
+  dplyr::select(NMFS_DNA_ID, Chrom, Locus, Pos, Allele) %>%
+  ungroup()
+
+# get the allele freqs
+rock_ckmr_markers <- rock2 %>%
+  filter(!is.na(Allele)) %>% # it is vital to filter out the NAs at this stage
+  group_by(Chrom, Locus, Pos, Allele) %>%
+  dplyr::summarise(counts = n()) %>%
+  group_by(Locus, Pos) %>%
+  mutate(Freq = counts / sum(counts)) %>%
+  dplyr::select(-counts) %>%
+  mutate(AlleIdx = 1,
+         LocIdx = 1) %>%
+  reindex_markers()
+```
+
+## Quickly look at allele frequencies for gopher and black-and-yellow
+
+```{r}
+subset_spp <- no_hi_missers %>%
+  ungroup() %>%
+  select(species, NMFS_DNA_ID)
+```
+
+
+```{r}
+# get the allele frequencies for gopher
+gopher_rock <- rock2 %>%
+  ungroup() %>%
+  left_join(., subset_spp) %>%
+  filter(species == "carnatus")
+
+gopher_ckmr_markers <- gopher_rock %>%
+  filter(!is.na(Allele)) %>% # it is vital to filter out the NAs at this stage
+  group_by(Chrom, Locus, Pos, Allele) %>%
+  dplyr::summarise(counts = n()) %>%
+  group_by(Locus, Pos) %>%
+  mutate(Freq = counts / sum(counts)) %>%
+  dplyr::select(-counts) %>%
+  mutate(AlleIdx = 1,
+         LocIdx = 1) %>%
+  reindex_markers()
+
+```
+
+
+```{r}
+# get the allele frequencies for black-and-yellow
+blackyellow_rock <- rock2 %>%
+  ungroup() %>%
+  left_join(., subset_spp) %>%
+  filter(species == "chrysomelas")
+
+blackyellow_ckmr_markers <- blackyellow_rock %>%
+  filter(!is.na(Allele)) %>% # it is vital to filter out the NAs at this stage
+  group_by(Chrom, Locus, Pos, Allele) %>%
+  dplyr::summarise(counts = n()) %>%
+  group_by(Locus, Pos) %>%
+  mutate(Freq = counts / sum(counts)) %>%
+  dplyr::select(-counts) %>%
+  mutate(AlleIdx = 1,
+         LocIdx = 1) %>%
+  reindex_markers()
+
+```
+
+```{r}
+gopher_freqs <- gopher_ckmr_markers %>%
+  select(Locus, Allele, Freq) %>%
+  mutate(species = "carnatus")
+```
+
+```{r}
+blackyellow_freqs <- blackyellow_ckmr_markers %>%
+  select(Locus, Allele, Freq) %>%
+  mutate(species = "chrysomelas")
+```
+
+```{r}
+gopher_freqs %>%
+  full_join(., blackyellow_freqs, by = c("Locus", "Allele")) %>%
+  write_csv("csv_outputs/gby_allele_freqs.csv")
+```
+
+
+```{r}
+# add reference column to prepare data for rubias
+dataset <- no_hi_missers %>%
+  mutate(sample_type = "reference") %>%
+  rename(collection = species) %>%
+  rename(indiv = NMFS_DNA_ID) %>%
+  mutate(repunit = collection) %>%
+  ungroup() %>%
+  select(sample_type, repunit, collection, indiv, locus, gene_copy, allele) # reorder the columns
+
+```
+
+We are going to do this by turning alleles into integers and spreading it and then getting it into the right format to run rubias.
+```{r spread-genos}
+# first make integers of the alleles
+alle_idxs <- dataset %>% 
+  #dplyr::select(NMFS_DNA_ID, locus, gene_copy, allele) %>%
+  group_by(locus) %>%
+  mutate(alleidx = as.integer(factor(allele, levels = unique(allele)))) %>%
+  ungroup() %>%
+  arrange(indiv, locus, alleidx) # rubias can handle NA's, so no need to change them to 0's
+  
+# select just the columns to retain and spread the alleles
+alle_idx2 <- alle_idxs[,-7]
+  
+# figure out what to do about the duplicates:
+two_col <- alle_idx2 %>%
+  group_by(indiv, locus) %>%
+  mutate(gene_copy = 1:2) %>% # this is to correct the errors in gene copy numbers introduced by the duplicate samples
+  unite(loc, locus, gene_copy, sep = ".") %>%
+  spread(loc, alleidx) 
+
+```
+
+From this, swap the identity of the maliger (actually caurinus); remove the helvomaculatus, simulator, and brevispinis.
+```{r}
+new2col <- two_col %>%
+  mutate(repunit = ifelse(indiv == "R035252", "caurinus", repunit)) %>%
+  mutate(collection = ifelse(indiv == "R035252", "caurinus", collection)) %>%
+  filter(!repunit %in% c("helvomaculatus", "simulator", "brevispinis"))
+
+```
+1639 samples
+
+## From `09-downsampled-baseline.Rmd`
+
+## Remove juveniles
+
+How many of those are juveniles?
+```{r}
+juvies <- new2col %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  filter(REPORTED_LIFE_STAGE == "JUVENILE") %>%
+  select(collection, indiv) %>%
+  unique()
+
+juv_samples <- juvies %>%
+  group_by(collection) %>%
+  tally() %>%
+  rename(juv_samples = n)
+```
+There are 164 juvenile samples
+
+If I remove samples that are juveniles, what are my numbers per species?
+```{r}
+new2col %>%
+  semi_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  #anti_join(., juvies, by = "indiv") %>%
+  group_by(collection) %>%
+  tally() %>%
+  rename(total_samples = n) %>%
+  left_join(., juv_samples, by = "collection") %>%
+  mutate(remaining_samples = total_samples-juv_samples) %>%
+  arrange(remaining_samples)
+
+```
+
+We lose reedi and wilsoni when we exclude juveniles, and drop down to just 2 samples of crameri and five of serriceps.
+
+However, generally including juveniles is a bad idea. So here's what I'll do: For any species for which we end up with fewer than 5 samples, I will include juveniles up to that number.
+
+```{r}
+# just juvenile samples for these three species
+juvs_to_keep <- new2col %>%
+  ungroup() %>%
+  filter(collection %in% c("reedi", "wilsoni", "crameri")) %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  group_by(collection) %>%
+  filter(REPORTED_LIFE_STAGE == "JUVENILE") %>%
+  select(1:184)
+
+```
+
+Now that I have those samples selected, I can remove all juvenile samples and put back those from the `juvs_to_keep`
+```{r}
+dataset <- new2col %>%
+  ungroup() %>%
+  anti_join(juvies) %>%
+  bind_rows(juvs_to_keep)
+
+dataset %>%
+  group_by(repunit) %>%
+  tally() %>%
+  arrange(n)
+  
+```
+Keeping just the juveniles from those three species, we have a total of 1,522 samples from 54 species.
+
+Generate yet another species tally at this point:
+```{r}
+spp_tally3 <- dataset %>%
+  group_by(repunit) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  rename(species = repunit) %>%
+  rename(juv_removed = n)
+
+spp_tally4 <- spp_tally2 %>%
+  left_join(spp_tally3)
+
+```
+
+## Downsample
+
+What if I take a maximum of 32 samples per species?
+(use set.seed to get reproducible results!)
+```{r downsample}
+# which species have fewer than 32 samples?
+sm_grps <- dataset %>%
+  group_by(collection) %>%
+  tally() %>%
+  arrange(n) %>%
+  filter(n < 33)
+
+# make a 2-col dataframe with just those groups
+sm_d2 <- dataset %>%
+  semi_join(., sm_grps) %>%
+  ungroup()
+
+# which species have more than 32 samples?
+lrg_grps <- dataset %>%
+  group_by(collection) %>%
+  tally() %>%
+  arrange(n) %>%
+  filter(n > 32)
+  
+# downsample those groups
+set.seed(5)
+down_sam <- dataset %>%
+  semi_join(., lrg_grps) %>%
+  group_by(collection) %>%
+  sample_n(., 32, replace = FALSE) %>%
+  ungroup()
+
+# finish the set.seed
+set.seed(NULL)
+
+# and add the data from the other groups back into the dataframe
+down_data <- sm_d2 %>%
+  bind_rows(down_sam) #%>%
+  # group_by(collection) %>%
+  # tally() %>%
+  # arrange(n)
+```
+
+Tally after downsampling:
+```{r}
+spp_tally5 <- down_data %>%
+  group_by(collection) %>%
+  tally() %>%
+  rename(species = collection) %>%
+  right_join(., spp_tally4) %>%
+  rename(downsampled = n) %>%
+  select(species, n_genotyped, post_filter, juv_removed, downsampled)
+  
+spp_tally5
+
+```
+
+
+## Self-assignment
+
+Now do the self-assignment:
+```{r}
+assign_down <- self_assign(down_data, gen_start_col = 5)
+```
+This dataset includes 1,002 samples.
+
+Assignment accuracy?  
+```{r}
+assign_down %>%
+  ungroup() %>%
+  filter(scaled_likelihood > 0.95) %>%
+  mutate(accurate = if_else(repunit == inferred_repunit, TRUE, FALSE)) %>%
+  filter(accurate == TRUE) #%>%
+  #filter(collection == "carnatus")
+
+```
+
+```{r}
+985/1002
+```
+
+z-scores?
+```{r}
+z_outliers <- assign_down %>%
+  filter(scaled_likelihood > 0.5 & z_score < -3) %>%
+  arrange(z_score)
+
+z_outliers
+```
+There are 5 samples with z-scores < -3.
+
+Let's remove those.
+```{r}
+down_data2 <- down_data %>%
+  ungroup() %>%
+  anti_join(., z_outliers)
+```
+Removing those leaves us with 997 samples.
+
+
+# Mixture assignment with outliers?
+
+Just to test it out, I'm going to remove these outliers from the baseline and then perform rubias's mixture assignment with them.
+
+```{r}
+# reference
+down_data2 <- down_data2 %>%
+  ungroup()
+
+# outliers for mixture assignment
+zs <- z_outliers %>%
+  select(indiv)
+
+just_zs <- down_data %>%
+  ungroup() %>%
+  right_join(., zs) %>%
+  mutate(sample_type = "mixture")
+
+```
+
+Now that the data are separated and formatted, do the mixture assignment
+```{r}
+# mix_zs <- infer_mixture(reference = down_data2, mixture = just_zs, gen_start_col = 5)
+```
+
+
+```{r}
+# mix_zs$indiv_posteriors %>%
+#   filter(PofZ > 0.50)
+#   
+```
+No change in the affiliation of any of those samples. I wonder if they might be contaminated? Out of curosity...
+
+```{r}
+# genos %>%
+#   filter(NMFS_DNA_ID == "R029287")
+```
+That sample is gtseq_run 55, id = s648
+
+```{r}
+# test <- read_feather("../new_baseline_data/feather_files/gtseq55_sebastes_spp_10292018.feather") 
+# 
+# test %>%
+#   filter(id == "s648") %>%
+#   group_by(locus) %>%
+#   select(locus, depth, rank, allele.balance) %>%
+#   arrange(locus, rank) %>%
+#   filter(rank > 2) %>%
+#   filter(depth > 8) %>%
+#   filter(allele.balance > 0.4 & allele.balance < 0.9)
+
+```
+Doesn't look contaminated. Okay, good.
+
+Take a look at the rosaceus samples:
+```{r}
+assign_down %>%
+  filter(collection == "rosaceus") %>%
+  filter(scaled_likelihood > 0.95)
+```
+Hmm, there is one sample with a z-score of -2.6, but otherwise, no oddities.
+
+
+
+## summary of assignment results with G/BY separate
+```{r}
+second_assign <- self_assign(down_data2, gen_start_col = 5)
+
+```
+
+Proportion correctly assigned?
+```{r}
+# at a 95% threshold
+second_assign %>%
+  filter(scaled_likelihood > 0.5) %>%
+  filter(repunit != inferred_repunit)
+```
+
+```{r}
+980/997
+```
+
+quick summary of the number of samples per species in the 997 dataset
+```{r}
+down_data2 %>%
+  group_by(collection) %>%
+  tally() %>%
+  summarise(sd(n))
+```
+
+
+
+Set the factor levels
+```{r}
+# and set the levels explicitly 
+second_assign$collection <- factor(second_assign$collection, levels = c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "emphaeus", "wilsoni", "zacentrus", "proriger", "semicinctus", "rubrivinctus", "levis", "elongatus", "miniatus", "pinniger", "babcocki", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "rufus", "ensifer", "diploproa", "nigrocinctus", "serriceps", "ovalis", "hopkinsi", "rufinanus", "moseri", "entomelas", "alutus", "jordani", "paucispinis", "goodei", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "melanostomus", "crameri", "melanostictus", "aleutianus", "borealis", "reedi", "polyspinis"))
+```
+
+
+Plot it up! (at the 50% threshold)
+```{r}
+assign_plot1 <- second_assign %>%
+  filter(scaled_likelihood > 0.5) %>%
+  mutate(correct = ifelse(collection == inferred_collection, "yes", "no")) %>%
+  select(indiv, collection, inferred_collection, scaled_likelihood, correct) %>%
+  group_by(collection, correct) %>%
+  tally() %>%
+  ggplot(aes(x = collection, y = n, fill = correct)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Samples") +
+  scale_fill_manual(values = c("firebrick", "darkblue")) +
+  guides(fill=guide_legend(title="Correct assignment"))
+
+assign_plot1 +
+  theme(
+    axis.text.x = element_text(angle = 90, face = "italic", size = 10),
+     axis.title = element_text(size = 15, margin = margin(t = 0, r = 20, b = 0, l = 0))
+  )
+
+ggsave("pdf_outputs/genetic_assignment_50.pdf", height = 4, width = 8)
+```
+
+What about at the 95% threshold?
+```{r}
+assign_plot2 <- second_assign %>%
+  filter(scaled_likelihood > 0.95) %>%
+  mutate(correct = ifelse(collection == inferred_collection, "yes", "no")) %>%
+  select(indiv, collection, inferred_collection, scaled_likelihood, correct) %>%
+  group_by(collection, correct) %>%
+  tally() %>%
+  ggplot(aes(x = collection, y = n, fill = correct)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Number of samples") +
+  scale_fill_manual(values = c("firebrick", "darkblue")) +
+  guides(fill=guide_legend(title="Correct assignment"))
+
+assign_plot2 +
+  theme(
+    axis.text.x = element_text(angle = 90, face = "italic", size = 10),
+    axis.title = element_text(size = 15, margin = margin(t = 0, r = 20, b = 0, l = 0))
+  )
+
+ggsave("pdf_outputs/genetic_assignment_95.pdf", height = 4, width = 8)
+```
+
+Try proportion:
+```{r}
+prop_plot <- second_assign %>%
+  filter(scaled_likelihood > 0.95) %>%
+  mutate(correct = ifelse(collection == inferred_collection, "yes", "no")) %>%
+  select(indiv, collection, inferred_collection, scaled_likelihood, correct) %>%
+  group_by(collection, correct) %>%
+  tally() %>%
+  ungroup() %>%
+  group_by(collection) %>%
+  mutate(proportion = n/(sum(n))) %>%
+  ggplot(aes(x = collection, y = proportion, fill = correct)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Proportion of samples") +
+  scale_fill_manual(values = c("firebrick", "darkblue")) +
+  guides(fill=guide_legend(title="Correct assignment"))
+
+prop_plot +
+  theme(
+    axis.text.x = element_text(angle = 90, face = "italic", size = 10),
+    axis.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14)
+  )
+
+ggsave("pdf_outputs/prop_genetic_assignment_95.pdf", height = 5, width = 8)
+
+
+```
+
+
+Combine the two:
+```{r}
+lower_like <- second_assign %>%
+  filter(scaled_likelihood > 0.5) %>%
+  mutate(correct = ifelse(collection == inferred_collection, "yes", "no")) %>%
+  select(indiv, collection, inferred_collection, scaled_likelihood, correct) %>%
+  group_by(collection, correct) %>%
+  tally()
+
+high_like <- second_assign %>%
+  filter(scaled_likelihood > 0.95) %>%
+  mutate(correct = ifelse(collection == inferred_collection, "yes", "no")) %>%
+  select(indiv, collection, inferred_collection, scaled_likelihood, correct) %>%
+  group_by(collection, correct) %>%
+  tally()
+
+hlik <- high_like %>%
+  spread(key = correct, value = n)
+
+llik <- lower_like %>%
+  spread(key = correct, value = n)
+
+
+
+# combo %>%
+#   rename(correct_50 = correct.x) %>%
+#   rename(correct_95 = correct.y) %>%
+#   
+# 
+# library(reshape2)
+# combo.long <-melt(combo,id.vars="collection")
+# 
+# 
+# combo %>%
+#   ggplot(aes(x = collection, y = num_50, fill = correct50)) +
+#   geom_bar(stat = "identity") +
+#   theme_bw() +
+#   xlab("Species") +
+#   ylab("Number of samples") +
+#   scale_fill_manual(values = c("firebrick", "darkblue")) +
+#   guides(fill=guide_legend(title="Correct assignment"))
+
+```
+
+
+## single GBY reporting unit
+
+Since all of the misassignments are GBY, make a single reporting unit.
+
+```{r}
+# change the carnatus reporting unit to chrysomelas
+gby_repu_2col <- down_data2 %>%
+  mutate(repunit = ifelse(repunit == "carnatus", "chrysomelas", repunit))
+
+# confirm that the repunit is changed but the collection is not.
+gby_repu_2col %>%
+  filter(collection == "carnatus")
+```
+
+Now try self-assignment with the single reporting unit
+```{r}
+gby_repu_assigned <- gby_repu_2col %>%
+  self_assign(., gen_start_col = 5)
+
+```
+
+Accuracy?
+```{r}
+gby_repu_assigned %>%
+  group_by(indiv) %>%
+  top_n(1, scaled_likelihood) %>% # just the top assignments for each individual
+  #filter(scaled_likelihood < 0.95 & scaled_likelihood > 0.5) %>%
+  filter(repunit == inferred_repunit) %>%
+  filter(scaled_likelihood < 0.95)
+```
+
+```{r}
+989/997
+```
+
+```{r}
+gby_repu_assigned %>%
+  filter(scaled_likelihood > 0.5 & scaled_likelihood < 0.95)
+```
+All assignments below the 95% threshold were gopher/black-and-yellow.
+
+Make the same plot with the single reporting unit:
+
+```{r}
+# and set the levels explicitly 
+gby_repu_assigned$repunit <- factor(gby_repu_assigned$repunit, levels = c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "emphaeus", "wilsoni", "zacentrus", "proriger", "semicinctus", "rubrivinctus", "levis", "elongatus", "miniatus", "pinniger", "babcocki", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "rufus", "ensifer", "diploproa", "nigrocinctus", "serriceps", "ovalis", "hopkinsi", "rufinanus", "moseri", "entomelas", "alutus", "jordani", "paucispinis", "goodei", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "melanostomus", "crameri", "melanostictus", "aleutianus", "borealis", "reedi", "polyspinis"))
+```
+
+```{r}
+gby_assign_plot <- gby_repu_assigned %>%
+  filter(scaled_likelihood > 0.5) %>%
+  mutate(correct = ifelse(scaled_likelihood > 0.95, "yes", "no")) %>%
+  #mutate(correct = ifelse(repunit == inferred_repunit, "yes", "no")) %>%
+  select(indiv, collection, repunit, inferred_repunit, scaled_likelihood, correct) %>%
+  group_by(repunit, correct) %>%
+  tally() %>%
+  ggplot(aes(x = repunit, y = n, fill = correct)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Samples") +
+  scale_fill_manual(values = c("firebrick", "darkblue")) +
+  guides(fill=guide_legend(title="Correct assignment"))
+
+gby_assign_plot +
+  theme(
+    axis.text.x = element_text(angle = 90, face = "italic", size = 10),
+     axis.title = element_text(size = 15, margin = margin(t = 0, r = 20, b = 0, l = 0))
+  )
+
+ggsave("pdf_outputs/gby_genetic_assignment_95.pdf", height = 4, width = 8)
+```
+
+
+
+
+What about z-statistics?
+```{r}
+gby_repu_assigned %>%
+  ungroup() %>%
+  filter(scaled_likelihood > 0.5 & z_score < -3)
+
+
+```
+No outliers. That's nice and much cleaner.
+
+Let's grab information for those samples
+```{r}
+clean_samples <- gby_repu_assigned %>%
+  ungroup() %>%
+  filter(collection == inferred_collection) %>%
+  select(indiv, collection) %>%
+  ungroup()
+```
+
+997 samples in total.
+
+Final tally/summary
+```{r}
+clean_samples %>%
+  group_by(collection) %>%
+  tally() %>%
+  rename(species = collection) %>%
+  right_join(., spp_tally5) %>%
+  rename(final_dataset = n) %>%
+  select(species, n_genotyped, post_filter, juv_removed, downsampled, final_dataset) %>%
+  arrange(desc(final_dataset)) %>%
+  write_csv("csv_outputs/final_species_tally_manuscript_v2.csv")
+```
+
+
+## Grab this dataset for a PCA
+
+Modified 2-column format
+```{r}
+gby_repu_2col %>% 
+  select(-sample_type, -repunit) %>%
+  write_csv("csv_outputs/gby_repu_2col_for_genepop.csv")
+
+```
+
+
+## calculate and plot int hz for each species
+
+I want to use this same dataset of 997 individuals for calculating int-hz.
+```{r}
+t1 <- clean_samples %>%
+  left_join(down_data2) %>%
+  group_by(indiv, collection) %>%
+  select(-sample_type, -repunit) %>%
+  gather(locus, allele, 3:182) %>%
+  ungroup() %>% # need to remove the .1 and .2 on the loci
+  separate(locus, c("Locus", "gene.copy"), sep = "[.]")
+```
+
+```{r compute-int-hzs}
+int_hz <- t1 %>% 
+  group_by(collection, indiv, Locus) %>% 
+  summarise(hz = allele[1]!=allele[2]) %>% 
+  filter(!is.na(hz)) %>% 
+  group_by(indiv, collection) %>% 
+  summarise(num_loc = n(), num_hz = sum(hz), fract_hz = num_hz / num_loc)
+
+```
+
+Read in the file with expected Hz (from MS toolkit) to confirm that the numbers are equivalent.
+```{r}
+hz_ex <- read_csv("csv_outputs/expected_Hz_fromMStoolkit.csv")
+hz_ex
+```
+
+
+
+
+## What about making a series of boxplots?
+
+Summary Statistics
+The lower and upper hinges correspond to the first and third quartiles (the 25th and 75th percentiles). 
+
+The upper whisker extends from the hinge to the largest value no further than 1.5 x IQR from the hinge (where IQR is the inter-quartile range, or distance between the first and third quartiles). The lower whisker extends from the hinge to the smallest value at most 1.5 x IQR of the hinge. Data beyond the end of the whiskers are called "outlying" points and are plotted individually.
+Now what about adding in the subgenera and coloring the boxes by that?
+
+Make a list of subgenera and species and read that in
+```{r}
+subgenera <- read_csv("../data/sebastes_subgenera.csv")
+  
+```
+
+
+```{r}
+int_hz_subg <- int_hz %>%
+  ungroup() %>%
+  left_join(., subgenera, by = c("collection" = "species"))
+
+# and set the levels explicitly again
+int_hz_subg$collection <- factor(int_hz_subg$collection, levels = c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "emphaeus", "wilsoni", "zacentrus", "proriger", "semicinctus", "rubrivinctus", "levis", "elongatus", "miniatus", "pinniger", "babcocki", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "rufus", "ensifer", "diploproa", "nigrocinctus", "serriceps", "ovalis", "hopkinsi", "rufinanus", "moseri", "entomelas", "alutus", "jordani", "paucispinis", "goodei", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "melanostomus", "crameri", "melanostictus", "aleutianus", "borealis", "reedi", "polyspinis"))
+
+```
+
+Change the colors:
+```{r}
+library(RColorBrewer)
+# subgenera colors
+#mycolors = colorRampPalette(brewer.pal(name="Accent", n = 8))(15)
+# mycolors = c("palegreen", "darkseagreen", "darkblue", "dodgerblue",  "steelblue4", "skyblue", "brown", "royalblue", "purple4", "orange", "chocolate", "saddlebrown", "navajowhite4", "darkgray", "black")
+#   
+# # species colors
+# mycol <- colorRampPalette(c("palegreen", "darkolivegreen", "darkslategrey", "darkgreen", "deepskyblue", "aquamarine4", "seagreen4", "cadetblue", "cyan", "darkblue", "midnightblue", "blue", "dodgerblue", "darkcyan", "darkslateblue", "slateblue", "steelblue4", "skyblue", "paleturquoise4", "brown", "royalblue", "purple4", "orange", "darkorange", "darkgoldenrod", "chocolate", "tan4", "saddlebrown", "sienna", "navajowhite4", "darkgray", "black"))(54)
+```
+
+Set the subgenera to the order of the factor (species)
+```{r}
+int_hz2 <- int_hz_subg %>%
+  ungroup()
+
+int_hz2$subgenus <- factor(int_hz2$subgenus, levels = c("Pteropodus", "Auctospina", "Allosebastes", "Hispaniscus", "Rosicola", "Sebastomus", "Sebastichthys", "Sebastocarus", "Acutomentum", "Sebastodes", "Sebastosomus", "Sebastopyr", "Eosebastes", "Zalopyr", "unclassified"))
+
+```
+
+
+## New colors for July 2019
+
+```{r}
+mycolors = c("darkgreen", "dodgerblue", "darkblue", "chartreuse", "aquamarine", "deeppink", "firebrick4", "orchid", "purple4", "orange", "orangered", "saddlebrown", "navajowhite4", "darkgray", "black")
+```
+
+
+```{r}
+# now boxplot it
+box3 <- ggplot(int_hz2) +
+  geom_boxplot(aes(x = reorder(collection, -fract_hz), y = fract_hz, fill = subgenus), position = "dodge") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Heterozygosity") +
+  scale_fill_manual(values = mycolors)
+
+b3 <- box3 +
+  theme(
+    axis.text.x = element_text(angle = 90, size = 10, face = "italic"),
+    axis.text.y = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    legend.text = element_text(size = 8, face = "italic"),
+    legend.position = c(0.8, 0.7)
+  )
+
+b3 + guides(fill=guide_legend(ncol=2))
+
+ggsave("pdf_outputs/sebastes_int_hz_new_colors.pdf", width = 8, height = 6)
+```
+update: Carlos wanted this plot ordered by int hz not by subgenus.
+
+Try using the subgenera for plotting genetic distance:
+
+```{r}
+dist <- read_csv("~/Desktop/sebastes_sppID/sebastes_genetic_distance_summary.csv")
+
+# group by model
+dist1 <- dist %>%
+  group_by(model_type)
+```
+
+```{r}
+# join expected Hz and genetic distance
+dist_hz2 <- dist1 %>%
+  left_join(., hz_ex) %>%
+  left_join(., subgenera)
+
+hz_ex %>%
+  arrange(desc(expected_Hz))
+
+
+# and set the levels
+dist_hz2$subgenus <- factor(dist_hz2$subgenus, levels = c("Pteropodus", "Auctospina", "Allosebastes", "Hispaniscus", "Rosicola", "Sebastomus", "Sebastichthys", "Sebastocarus", "Acutomentum", "Sebastodes", "Sebastosomus", "Sebastopyr", "Eosebastes", "Zalopyr", "unclassified"))
+
+levels(dist_hz2$subgenus)
+```
+
+```{r plot-dist-hz}
+# italicize atrovirens in the axis title
+my_x_title <- expression(paste("Genetic distance from ", italic("S. atrovirens")))
+
+# plot 
+d2 <- dist_hz2 %>%
+  filter(model_type == "pairwise_analytic") %>%
+  ggplot(aes(x = genetic_distance, y = expected_Hz, color = subgenus)) +
+  geom_point(size = 2, alpha = 0.9) +
+  theme_bw() +
+  scale_color_manual(values = mycolors) +
+  xlab(my_x_title) +
+  ylab("Heterozygosity")
+
+d2 + theme(
+  legend.text = element_text(size = 8, face = "italic")) + 
+  guides(color = guide_legend(title="Subgenus"))
+
+# save that plot
+ggsave("pdf_outputs/subgenera_genetic_distance_v_expected_hz.pdf", width = 7, height = 5)
+```
+
+Play with the species as individuals shapes within the subgenera?
+
+Maybe that would be levels within the subgenera "factors"?
+
+```{r}
+p1 <- dist_hz %>%
+  filter(model_type == "pairwise_analytic") %>%
+  ggplot(aes(x = genetic_distance, y = expected_Hz, color = species)) +
+  geom_point() +
+  theme_bw() +
+  scale_color_manual(values = mycol) +
+  xlab("Genetic distance") +
+  ylab("Heterozygosity")
+
+p1 + facet_wrap(. ~subgenus, nrow = 5, ncol = 3)
+```
+This defeats the purpose of seeing the decline in heterozygosity over genetic distance.
+
+## Missing data
+
+Carlos wants a table of how many loci are missing from which species - let's see if we can tally that up.
+
+```{r}
+c1 <- clean_samples %>%
+  rename(NMFS_DNA_ID = indiv) %>%
+  rename(species = collection)
+
+c2 <- c1 %>%
+  left_join(., geno_one_each2)
+
+# designate which individuals, for which species have missing alleles at which loci
+c3 <- c2 %>% 
+  group_by(NMFS_DNA_ID, gtseq_run, locus) %>%
+  mutate(missing = ifelse(is.na(allele), "yes", "no")) 
+
+missing_data_tbl <- c3 %>%
+  ungroup() %>%
+  #select(NMFS_DNA_ID, species, locus, missing) %>%
+  filter(missing == "yes") %>%
+  unique() %>%
+  group_by(species, locus) %>%
+  tally() %>%
+  mutate(missing_loci = n/2)
+
+# how many species per collection
+c4 <- c1 %>%
+  group_by(species) %>%
+  tally() %>%
+  rename(total_samples = n)
+
+# add the total samples column to the missing data table
+mdata_tbl <- missing_data_tbl %>%
+  left_join(., c4, by = "species") %>%
+  mutate(perc = 100*(missing_loci/total_samples)) %>%
+  ungroup()
+  #select(locus, species, perc) %>%
+  #spread(species, perc)
+```
+There are only 83 loci in that table, suggesting that there are some loci that are never missing in any species (in our final 997 sample dataset).
+
+out of curiosity do they actually not amplify in those species?
+```{r}
+library(feather)
+raw1 <- read_feather("../new_baseline_data/feather_files/gtseq66_sebastes_spp_10292018.feather")
+
+raw1 %>%
+  filter(id == "s2290") %>%
+  select(locus, depth) %>%
+  group_by(locus) %>%
+  arrange(locus) %>%
+  top_n(., 2) %>%
+  filter(locus == "tag_id_1810")
+```
+Yes.
+
+Can we figure out which loci those are?
+
+```{r}
+missingers <- geno_one_each2 %>%
+  ungroup() %>%
+  select(locus) %>%
+  unique() %>%
+  left_join(., mdata_tbl) #%>%
+  #mutate_all(funs(replace(., is.na(.), 0))) %>%
+  #write_csv("csv_outputs/missing_data_table.csv")
+  
+```
+
+What about a summary of how many loci failed entirely in a given species?
+```{r}
+goners <- mdata_tbl %>%
+  group_by(species) %>%
+  filter(perc == 100) %>%
+  select(species) %>%
+  tally()
+```
+
+add all species to the table
+```{r}
+spps <- c1 %>%
+  ungroup() %>%
+  select(species) %>%
+  unique()
+  
+missing_ones <- spps %>%
+  ungroup() %>%
+  left_join(., goners) %>%
+  mutate_all(funs(replace(., is.na(.), 0))) %>%
+  left_join(., subgenera)
+  
+
+# and set the levels explicitly 
+missing_ones$species <- factor(missing_ones$species, levels = c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "emphaeus", "wilsoni", "zacentrus", "proriger", "semicinctus", "rubrivinctus", "levis", "elongatus", "miniatus", "pinniger", "babcocki", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "rufus", "ensifer", "diploproa", "nigrocinctus", "serriceps", "ovalis", "hopkinsi", "rufinanus", "moseri", "entomelas", "alutus", "jordani", "paucispinis", "goodei", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "melanostomus", "crameri", "melanostictus", "aleutianus", "borealis", "reedi", "polyspinis"))
+
+levels(missing_ones$species)
+```
+
+```{r}
+# subgenus colors
+# mycolors = c("palegreen", "darkseagreen", "darkblue", "dodgerblue",  "steelblue4", "skyblue", "brown", "royalblue", "purple4", "orange", "chocolate", "saddlebrown", "navajowhite4", "darkgray", "black")
+
+# and set the subgenus levels
+missing_ones$subgenus <- factor(missing_ones$subgenus, levels = c("Pteropodus", "Auctospina", "Allosebastes", "Hispaniscus", "Rosicola", "Sebastomus", "Sebastichthys", "Sebastocarus", "Acutomentum", "Sebastodes", "Sebastosomus", "Sebastopyr", "Eosebastes", "Zalopyr", "unclassified"))
+
+levels(missing_ones$subgenus)
+```
+
+```{r}
+# quick plot?
+mplot <- ggplot(missing_ones, aes(x = reorder(species, n), y = n, fill = subgenus)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  ylab("Number of missing loci") +
+  xlab("Species") +
+  scale_fill_manual(values = mycolors)
+  
+
+mplot +
+  theme(
+    axis.text.x = element_text(angle = 90, face = "italic"),
+    legend.text = element_text(face = "italic")
+  )
+
+ggsave("pdf_outputs/missing_loci_plot_new_colors.pdf", height = 6, width = 8)
+```
+
+
+## Additions to Table 1
+
+I want to amend Table 1 to include nucleotide diversity and internal heterozygosity for each species
+
+```{r}
+# read in nucleotide diversity stats
+pi <- read_csv("csv_outputs/nucleotide_diversity.csv")
+
+# generate an average int_hz for each species
+mean_hz <- int_hz2 %>%
+  group_by(collection) %>%
+  summarise(mean(fract_hz)) %>%
+  rename(species = collection, int_hz = `mean(fract_hz)`)
+
+# sample tally
+clean_samples %>%
+  group_by(collection) %>%
+  tally() %>%
+  rename(species = collection) %>%
+  left_join(., pi) %>%
+  left_join(., mean_hz) %>%
+  left_join(., subgenera) %>%
+  select(-Li_etal) %>%
+  arrange(desc(nuc_diversity)) %>% # arrange the table by decreasing nucleotide diversity
+  write_csv("csv_outputs/ssp_id_table1.csv")
+
+```
+
+# calculate stats for nuc diversity
+
+```{r}
+# what proportion of species have less than 50% of the variation in atrovirens?
+pi %>%
+  ungroup() %>%
+  filter(nuc_diversity < (0.0067804192/2))
+
+44/54
+
+```
+

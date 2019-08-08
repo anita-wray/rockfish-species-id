@@ -1,0 +1,351 @@
+---
+title: "clean baseline"
+output: html_notebook
+---
+
+After the filtering steps and self-assignment results from `02-` coupled with some investigation into mis-identified samples in `04-`, it's clear there are some fish that should be excluded (helvomaculatus, brevispinis, simulator) and others with incorrect meta data (maliger).
+
+Here I clean up those things and see what the assignment looks like.
+
+I also want to add some meta data to the samples so that I can understand any oddities - like with the hopkinsi...
+
+```{r}
+library(tidyverse)
+library(rubias)
+
+# data
+two_col <- read_csv("csv_outputs/sebastes_spp_baseline_two_col.csv")
+
+# previous mis-assignments at the 95% level
+mis <- read_csv("csv_outputs/baseline_misassignments95.csv")
+
+mis
+
+# metadata
+meta <- readRDS("../new_baseline_data/processed/meta-data-tibble.rds")
+
+# from the nsf data, I know there are duplicates in the meta data
+```
+From this, swap the identity of the maliger (actually caurinus); remove the helvomaculatus, simulator, and brevispinis.
+
+```{r}
+new2col <- two_col %>%
+  mutate(repunit = ifelse(indiv == "R035252", "caurinus", repunit)) %>%
+  mutate(collection = ifelse(indiv == "R035252", "caurinus", collection)) %>%
+  filter(!repunit %in% c("helvomaculatus", "simulator", "brevispinis"))
+
+new2col %>%
+  write_csv("csv_outputs/new2col.csv")
+
+```
+
+Now try self-assignment to see where the rest of the misassignments fall.
+
+```{r run-rubias}
+# perform self-assignment of reference samples
+new_self <- self_assign(new2col, gen_start_col = 5)
+```
+
+```{r correct-assign}
+# correct assigments at the 95% threshold?
+new_self %>%
+  filter(repunit == inferred_repunit) %>%
+  filter(scaled_likelihood > 0.95)
+```
+That is 1,579 of 1,647
+```{r}
+1579/1647
+```
+95.9% accurate assignment at the 95% threshold. Great.
+
+```{r miss-assign}
+# and take a quick look at the misassignments
+new_miss <- new_self %>%
+  filter(inferred_repunit != repunit) %>%
+  filter(scaled_likelihood > 0.95) # 9 high confidence mis-assignments
+
+new_miss %>%
+  filter(repunit %in% c("carnatus", "chrysomelas")) # 8 of those assignments are gopher/black-and-yellow
+
+8/9
+
+```
+
+And for misassignments at a lower threshold?
+
+```{r}
+new_self %>%
+  filter(scaled_likelihood > 0.5 & scaled_likelihood < 0.95) %>%
+  filter(!collection %in% c("carnatus", "chrysomelas"))
+```
+All 59 intermediate misassignments are gopher/black-and-yellow.
+
+Misassignments without gopher/black-and-yellow
+```{r}
+new_self %>%
+  filter(inferred_repunit != repunit) %>%
+  filter(scaled_likelihood > 0.95) %>%
+  filter(!collection %in% c("carnatus", "chrysomelas"))
+```
+
+That made all of the other strong misassignments, with the exception of `R013353` go away.
+
+Based on the PCA, let's take a look at misassigned caurinus samples:
+```{r}
+new_self %>%
+  filter(collection == "caurinus") %>%
+  filter(scaled_likelihood > 0.5) %>%
+  arrange(z_score)
+```
+There are four caurinus samples with z-scores < -2; one of which is -12! 
+This gives credence to the idea that they are another species, maybe not in the baseline? Or hybrids?
+
+Still not sure what to think about the one that assigned to carnatus.
+Check meta data?
+
+For the assignment accuracy:
+```{r}
+new_self %>%
+  filter(repunit == inferred_repunit) %>%
+  filter(scaled_likelihood > 0.95)
+```
+
+```{r}
+1579/1647
+```
+95.87% accurately assigned at the 95% threshold
+
+```{r}
+new_self %>%
+  filter(collection %in% c("carnatus", "chrysomelas")) %>%
+  filter(scaled_likelihood > 0.95)
+```
+
+287/346 total GBY
+
+```{r}
+287/346
+```
+Lower accuracy for GBY (83%)
+
+Were all mis-id's to the other species?
+```{r}
+new_self %>%
+  filter(collection %in% c("carnatus", "chrysomelas")) %>%
+  filter(scaled_likelihood > 0.5) %>%
+  filter(!inferred_collection %in% c("carnatus", "chrysomelas"))
+```
+A single sample assigned to caurinus, but with a z-score of -10!
+
+
+## z-score outliers
+
+Now I'm curious how many of these samples may be from species outside of our baseline according to the z-scores
+
+```{r}
+new_self %>%
+  filter(scaled_likelihood > 0.5) %>%
+  filter(z_score < -3) %>%
+  #filter(z_score > 3) %>%
+  arrange(z_score) %>%
+  select(indiv, repunit, inferred_repunit, scaled_likelihood, z_score) %>%
+  left_join(., meta, by = c("indiv" = "NMFS_DNA_ID")) %>%
+  select(-PHENOTYPE, HATCHERY_MARK, TAG_NUMBER, ESTIMATED_DATE, LANDFALL_PORT, CRUISE, HAUL)
+```
+Hmmm - a bunch of juveniles. What happens if I remove juvenile samples from the analysis?
+
+For most of these samples, they assign to their reported unit even though they have low z-scores.
+
+Test out making a genepop file without the z-score outliers
+```{r}
+# which ones to exlude
+outliers <- new_self %>%
+  filter(scaled_likelihood > 0.5) %>%
+  filter(z_score < -3) %>%
+  select(indiv)
+
+# remove these from the new two-col file
+for_genepop <- new2col %>%
+  anti_join(., outliers, by = "indiv") %>%
+  select(3:184)
+
+# for_genepop %>%
+#   read_csv("csv_outputs/new_baseline_zscores_no_helv_etc.csv")
+```
+
+Just to test it out, I'm going to remove these outliers from the baseline and then perform rubias's mixture assignment with them.
+
+```{r}
+no_zs <- new2col %>%
+  anti_join(., outliers, by = "indiv")
+
+just_zs <- new2col %>%
+  right_join(., outliers, by = "indiv") %>%
+  mutate(sample_type = "mixture")
+
+```
+
+Now that the data are separated and formatted, do the mixture assignment
+```{r}
+mix_zs <- infer_mixture(reference = no_zs, mixture = just_zs, gen_start_col = 5)
+```
+
+
+```{r}
+mix_zs$indiv_posteriors %>%
+  filter(PofZ > 0.5) %>%
+  select(mixture_collection, collection, PofZ, z_score, n_miss_loci) %>%
+  filter(z_score > -3)
+```
+
+
+
+
+## single GBY reporting unit
+
+Since all of the intermediate assignments and 8/9 of the high confidence misassignments are GBY, let's use a single reporting unit for them.
+
+```{r}
+# change the carnatus reporting unit to chrysomelas
+gby_repu_2col <- new2col %>%
+  mutate(repunit = ifelse(repunit == "carnatus", "chrysomelas", repunit))
+
+# confirm that the repunit is changed but the collection is not.
+gby_repu_2col %>%
+  filter(collection == "carnatus")
+```
+
+Now try self-assignment with the single reporting unit
+```{r}
+gby_repu_assigned <- gby_repu_2col %>%
+  self_assign(., gen_start_col = 5)
+
+```
+
+```{r}
+gby_repu_assigned %>%
+  filter(repunit == inferred_repunit) %>%
+  filter(scaled_likelihood > 0.95) %>%
+  filter(repunit %in% c("carnatus", "chrysomelas"))
+```
+
+```{r}
+1586/1647
+```
+That only bumps it up to 96.3% accurate assignment because there are still lesser assignments (> 0.95)
+
+
+## playing with int hz
+
+```{r}
+t1 <- for_genepop %>%
+  group_by(indiv, collection) %>%
+  gather(locus, allele, 3:182) %>%
+  ungroup() %>% # need to remove the .1 and .2 on the loci
+  separate(locus, c("Locus", "gene.copy"), sep = "[.]")
+```
+
+
+```{r compute-int-hzs}
+int_hz <- t1 %>% 
+  group_by(collection, indiv, Locus) %>% 
+  summarise(hz = allele[1]!=allele[2]) %>% 
+  filter(!is.na(hz)) %>% 
+  group_by(indiv, collection) %>% 
+  summarise(num_loc = n(), num_hz = sum(hz), fract_hz = num_hz / num_loc)
+
+```
+And now let us plot that.
+```{r plot-int-hz, fig.width=12}
+ggplot(int_hz, aes(x = fract_hz, fill = collection)) +
+  geom_density(alpha = 0.3) +
+  theme_bw() +
+  xlab("Internal heterozygosity") +
+  ylab("Density")
+
+ggsave("pdf_outputs/int-hz_plot.pdf", height = 6, width = 10)
+
+```
+This is really only useful if the colors of phylogenetically relevant.
+
+Or I could take a subset of the species:
+```{r}
+sp_keep <- c("aurora", "diploproa", "oculatus", "rosaceus", "chlorostictus", "nigrocinctus", "rufus", "ovalis", "goodei", "levis", "mystinus", "flavidus", "atrovirens", "caurinus", "nebulosus", "rastrelliger", "saxicola", "elongatus", "miniatus", "ruberrimus", "reedi","aleutianus", "wilsoni", "proriger")
+
+# factor_spkeep <- factor(sp_keep)
+# levels(factor_spkeep) <- c("aurora", "diploproa", "oculatus", "rosaceus", "chlorostictus", "nigrocinctus", "rufus", "ovalis", "goodei", "levis", "mystinus", "flavidus", "atrovirens", "caurinus", "nebulosus", "rastrelliger", "saxicola", "elongatus", "miniatus", "ruberrimus", "reedi","aleutianus", "wilsoni", "proriger")
+
+
+sub <- int_hz %>%
+  filter(collection %in% levels(factor_spkeep))
+
+# levels(sub$collection) <- c("aurora", "diploproa", "oculatus", "rosaceus", "chlorostictus", "nigrocinctus", "rufus", "ovalis", "goodei", "levis", "mystinus", "flavidus", "atrovirens", "caurinus", "nebulosus", "rastrelliger", "saxicola", "elongatus", "miniatus", "ruberrimus", "reedi","aleutianus", "wilsoni", "proriger")
+
+ggplot(sub, aes(x = fract_hz, fill = collection)) +
+  geom_density(alpha = 0.3) +
+  theme_bw() +
+  xlab("Internal heterozygosity") +
+  ylab("Density")
+
+#ggplot("pdf_outputs/int-hz-subset.pdf", width = 10, height = 5)
+```
+
+What about making a series of boxplots?
+
+```{r}
+box <- ggplot(int_hz) +
+  geom_boxplot(aes(x = collection, y = fract_hz, fill = collection), position = "dodge") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Internal heterozygosity")
+
+
+box +
+  theme(
+    axis.text.x = element_text(angle = 90)
+  )
+```
+Summary Statistics
+The lower and upper hinges correspond to the first and third quartiles (the 25th and 75th percentiles). 
+
+The upper whisker extends from the hinge to the largest value no further than 1.5 x IQR from the hinge (where IQR is the inter-quartile range, or distance between the first and third quartiles). The lower whisker extends from the hinge to the smallest value at most 1.5 x IQR of the hinge. Data beyond the end of the whiskers are called "outlying" points and are plotted individually.
+
+I still want to set the species phylogenetically rather than alphabetically!
+```{r}
+# set the levels explicitly
+int_hz$collection <- factor(int_hz$collection, levels = c("atrovirens", "chrysomelas", "carnatus", "caurinus", "maliger", "nebulosus", "dallii","rastrelliger", "auriculatus", "saxicola", "semicinctus", "elongatus", "miniatus", "pinniger", "oculatus", "constellatus", "umbrosus", "rosaceus", "chlorostictus", "ensifer", "babcocki", "nigrocinctus", "rubrivinctus", "serriceps", "rufus", "ovalis", "hopkinsi", "rufinanus", "moseri", "jordani", "paucispinis", "goodei", "levis", "entomelas", "mystinus", "diaconus", "flavidus", "serranoides", "melanops", "ruberrimus", "aurora", "diploproa", "melanostomus", "reedi", "crameri", "polyspinis", "alutus", "melanostictus", "aleutianus", "emphaeus", "wilsoni", "zacentrus", "proriger", "borealis"))
+
+# check that the levels stuck
+levels(int_hz$collection)
+
+# now boxplot it
+box2 <- ggplot(int_hz) +
+  geom_boxplot(aes(x = collection, y = fract_hz, fill = collection), position = "dodge") +
+  theme_bw() +
+  xlab("Species") +
+  ylab("Internal heterozygosity")
+
+
+box2 +
+  theme(
+    axis.text.x = element_text(angle = 90, size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  ) +
+  guides(fill = FALSE)
+
+ggsave("pdf_outputs/int-hz-boxplot.pdf", height = 8, width = 10)
+
+```
+
+Can we also examine the difference from the mean hz of atrovirens?
+```{r}
+int_hz %>%
+  group_by(collection) %>%
+  summarise(mean_hz = mean(fract_hz)) %>%
+  arrange(desc(mean_hz)) %>%
+  mutate(diff = mean_hz/0.46478647) %>%
+  mutate(perc = diff*100) %>%
+  filter(diff < 0.5)
+```
+

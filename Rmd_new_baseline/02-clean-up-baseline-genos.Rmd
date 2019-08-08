@@ -1,0 +1,530 @@
+---
+title: "clean-up baseline genotypes"
+output: html_notebook
+---
+
+read in data and libraries
+```{r}
+library(tidyverse)
+library(CKMRsim) # add this for the index markers function
+
+genos <- readRDS("../new_baseline_data/processed/called_genos_na_explicit.rds")
+genos1 <- genos %>% 
+  filter(!str_detect(NMFS_DNA_ID, "N")) # remove Lorne's ambiguous yelloweye samples
+labels <- readRDS("../new_baseline_data/processed/label-tibble.rds")
+samples <- readRDS("../new_baseline_data/processed/sample-sheet-tibble.rds")
+
+# meta data
+meta <- readRDS("../new_baseline_data/processed/meta-data-tibble.rds") %>%
+  select(1,8,13,22) %>% # just the relevant columns for now
+  mutate(REPORTED_LIFE_STAGE = ifelse(REPORTED_LIFE_STAGE == "Adult", "ADULT", REPORTED_LIFE_STAGE)) # make the syntax consistent
+  
+# make the gtseq run a consistent data type
+labels$gtseq_run <- as.integer(labels$gtseq_run)
+
+# how many unique samples at this stage?
+genos1 %>%
+  select(NMFS_DNA_ID) %>%
+  unique()
+```
+
+Okay, there are some species names that need to be modified because there is the "S" for Sebastes in front of the name:
+```{r}
+labels %>%
+  group_by(species) %>%
+  tally()
+```
+
+```{r}
+labels1 <- labels %>%
+  mutate(species = ifelse(grepl("S", species), (gsub("S", "", species)), species))
+
+labels1 %>%
+  group_by(species) %>%
+  tally() %>%
+  arrange(n) %>%
+  write.table("csv_outputs/sebastes_meta_species_tally.csv")
+```
+
+Now join the data
+```{r}
+# I can join these datasets by gtseq run and id
+genos_spp <- labels1 %>%
+  left_join(., genos1, by = c("id", "gtseq_run")) %>%
+  select(gtseq_run, id, species, everything())
+
+# how many samples?
+genos_spp %>%
+  select(id, gtseq_run) %>%
+  unique()
+```
+
+With the species information tacked on, I should be able to organize my data table for self-assignment using rubias.
+
+## Some initial filters
+
+### Take highest read-depth call for multiply-genotyped DNA_IDs
+
+I'm not sure if there are any of these, but best to leave it in here...
+
+Now, here is a harder operation: if an individual is multiply-genotyped, take the
+genotype with the highest total read depth.  
+```{r take-just-one}
+# slow-ish function to get the total read depth column
+tdepth <- function(a, d) {
+  if(any(is.na(a))) {
+    return(NA)
+  }
+  if(a[1]==a[2]) {
+    return(d[1])
+  } else {
+    return(d[1] + d[2])
+  }
+  
+}
+# this takes the highest read-depth instance of each duplicately-genotyped individual.
+geno_one_each <- genos_spp %>%
+  group_by(NMFS_DNA_ID, species, locus, gtseq_run) %>%
+  mutate(total_depth = tdepth(allele, depth)) %>%
+  ungroup() %>%
+  arrange(NMFS_DNA_ID, species, locus, total_depth, gtseq_run, depth) %>%
+  group_by(NMFS_DNA_ID, species, locus) %>%
+  mutate(rank = 1:n()) %>% 
+  #ungroup() %>%
+  filter(rank <= 2)
+  
+
+# how many samples now?
+geno_tally1 <- geno_one_each %>%
+  group_by(NMFS_DNA_ID) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  left_join(., meta, by = "NMFS_DNA_ID") %>%
+  select(NMFS_DNA_ID, SPECIES, REPORTED_LIFE_STAGE) %>%
+  unique() %>%
+  group_by(SPECIES) %>%
+  tally()
+```
+Eight NMFS_DNA_IDs occur twice - so we narrowed those duplicates down.
+
+(why is there one sample that is ambiguous in the meta data and one NA?)
+
+### Remove the 6 loci which Hayley has been removing
+
+```{r remove-loci}
+# read in a list of the 6 loci
+to_remove <- read_csv("../data/loci_to_remove.csv")
+
+# only keep the loci that are not those 6
+keepers <- geno_one_each %>%
+  anti_join(., to_remove, by = "locus")
+
+# that should leave 90 loci  
+```
+
+### Toss out indivs with missing data at more than 25 loci
+Now, toss out any individual with fewer than 65 non-missing loci
+```{r toss-missers}
+no_hi_missers <- keepers %>% 
+  group_by(NMFS_DNA_ID, gtseq_run) %>%
+  filter(sum(!is.na(allele)) >= (65*2))
+```
+So, we started with `r length(unique(geno_one_each$NMFS_DNA_ID))` 
+and after filtering out indivs with fewer than 65 genotyped loci, we were left with 
+`r length(unique(no_hi_missers$NMFS_DNA_ID))` individuals.  Those are the ones that
+we will run through rubias to identify to species.
+
+1796 down to 1657 after removing individuals with too much missing data.
+```{r}
+rock2 <- no_hi_missers %>% 
+  dplyr::select(NMFS_DNA_ID, species, locus, allele) %>%
+  mutate(Chrom = "GTseq") %>% 
+  mutate(Pos = as.integer(factor(locus, levels = unique(locus)))) %>%
+  dplyr::rename(Locus = locus,
+         Allele = allele) %>%
+  dplyr::select(NMFS_DNA_ID, Chrom, Locus, Pos, Allele) %>%
+  ungroup()
+
+# get the allele freqs
+rock_ckmr_markers <- rock2 %>%
+  filter(!is.na(Allele)) %>% # it is vital to filter out the NAs at this stage
+  group_by(Chrom, Locus, Pos, Allele) %>%
+  dplyr::summarise(counts = n()) %>%
+  group_by(Locus, Pos) %>%
+  mutate(Freq = counts / sum(counts)) %>%
+  dplyr::select(-counts) %>%
+  mutate(AlleIdx = 1,
+         LocIdx = 1) %>%
+  reindex_markers()
+```
+
+## Making genotype matrices
+```{r}
+# rock_haps <- no_hi_missers %>%
+#   filter(!is.na(allele)) %>%  # once again, it is critical to remove these at this point
+#   select(NMFS_DNA_ID, locus, gene_copy, allele) %>%
+#   rename(Locus = locus, Allele = allele)
+# 
+# rock_idx_frame <- rock_ckmr_markers %>%
+#   select(Locus, Allele, LocIdx, AlleIdx) %>%
+#   group_by(Locus) %>% # something here is happening that is duplicating some loci in some individuals.
+#   mutate(NumA = n()) %>%  # get the number of alleles at each locus
+#   ungroup() %>%
+#   left_join(rock_haps, .)  %>%  # join the alle_idx's onto the actual genotype data
+#   select(NMFS_DNA_ID, Locus, gene_copy, LocIdx, NumA, AlleIdx) %>%
+#   group_by(NMFS_DNA_ID, Locus) %>%
+#   mutate(gene_copy = 1:2)
+#   spread(key = gene_copy, value = AlleIdx) %>%
+#   mutate(GenoIdx = index_ab(a = `1`, b = `2`, A = NumA))
+# 
+# # make a matrix of genotype integers 
+# wide_rock <- rock_idx_frame %>%
+#   ungroup() %>%
+#   select(NMFS_DNA_ID, LocIdx, GenoIdx) %>%
+#   spread(data = ., key = LocIdx, value = GenoIdx)
+
+```
+
+Don't forget to set NA's to 0, and then decrease each value by 1:
+```{r make-mat}
+# rocky_mat <- as.matrix(wide_kelp[, -1])
+# rownames(rocky_mat) <- wide_kelp$NMFS_DNA_ID
+# rocky_mat[is.na(rocky_mat)] <- 0
+# rocky_mat <- rocky_mat - 1
+# storage.mode(rocky_mat) <-  "integer"
+```
+
+## Looking for duplicated samples
+
+We can quickly look through rocky_mat for pairs of indivs with lots of matching genotypes.
+```{r check-for-dupes}
+# matchers <- pairwise_geno_id(S = rocky_mat, max_miss = 12) %>%
+#   arrange(num_mismatch) %>%
+#   mutate(NMFS_DNA_ID_1 = rownames(rocky_mat)[ind1],
+#          NMFS_DNA_ID_2 = rownames(rocky_mat)[ind2])
+# 
+# full_matchers <- matchers %>%
+#   filter(num_mismatch < 5)
+```
+
+Maybe here is the spot to test removing adults?
+How many species are dependent on juveniles at this point?
+```{r}
+no_hi_missers %>%
+  left_join(., meta, by = "NMFS_DNA_ID") %>%
+  ungroup() %>%
+  select(species, NMFS_DNA_ID, REPORTED_LIFE_STAGE) %>%
+  unique() %>%
+  group_by(species, REPORTED_LIFE_STAGE) %>%
+  tally()
+  
+```
+
+
+
+Remove juveniles with the exception of crameri, wilsoni, and reedi
+```{r}
+# get rid of juveniles
+data_wo_juvs <- dataset %>%
+  filter(REPORTED_LIFE_STAGE != "JUVENILE")
+
+# keepers
+juvs_to_keep <- dataset %>%
+  filter(collection %in% c("reedi", "crameri", "wilsoni")) %>%
+  filter(REPORTED_LIFE_STAGE == "JUVENILE")
+
+# add back just the juvs from the three target species
+data2 <- data_wo_juvs %>%
+  bind_rows(juvs_to_keep)
+
+data2 %>%
+  group_by(collection) %>%
+  tally()
+```
+
+```
+
+
+
+
+
+
+
+
+```{r}
+# add reference column to prepare data for rubias
+dataset <- no_hi_missers %>%
+  mutate(sample_type = "reference") %>%
+  rename(collection = species) %>%
+  rename(indiv = NMFS_DNA_ID) %>%
+  mutate(repunit = collection) %>%
+  ungroup() %>%
+  select(sample_type, repunit, collection, indiv, locus, gene_copy, allele) # reorder the columns
+
+dataset %>%
+  group_by(indiv) %>%
+  tally() %>%
+  arrange(desc(n))
+```
+
+We are going to do this by turning alleles into integers and spreading it and then getting it into the right format to run rubias.
+```{r spread-genos}
+# first make integers of the alleles
+alle_idxs <- dataset %>% 
+  #dplyr::select(NMFS_DNA_ID, locus, gene_copy, allele) %>%
+  group_by(locus) %>%
+  mutate(alleidx = as.integer(factor(allele, levels = unique(allele)))) %>%
+  ungroup() %>%
+  arrange(indiv, locus, alleidx) # rubias can handle NA's, so no need to change them to 0's
+  
+# select just the columns to retain and spread the alleles
+alle_idx2 <- alle_idxs[,-7]
+  
+# figure out what to do about the duplicates:
+two_col <- alle_idx2 %>%
+  group_by(indiv, locus) %>%
+  mutate(gene_copy = 1:2) %>% # this is to correct the errors in gene copy numbers introduced by the duplicate samples
+  unite(loc, locus, gene_copy, sep = ".") %>%
+  spread(loc, alleidx) 
+  
+two_col <- two_col %>%
+  ungroup()
+
+two_col %>%
+  select(repunit) %>%
+  group_by(repunit) %>%
+  tally() %>% write_csv("csv_outputs/sebastes_genos_species_tally.csv")
+
+# write this file to a thing that can be read-into other softwares
+two_col %>%
+ write_csv("csv_outputs/sebastes_spp_baseline_two_col.csv")
+
+# also for other Rmd docs
+```
+
+We want to perform self-assignment on the baseline genotypes using rubias:
+This baseline includes 57 species and 1657 individuals.
+
+```{r run-rubias}
+# Now that the data are in the corret format, load Rubias
+library(rubias)
+
+# perform self-assignment of reference samples
+ref_self <- self_assign(two_col, gen_start_col = 5)
+
+# and take a quick look at those assignments
+ref_self %>%
+  filter(inferred_repunit == repunit) %>%
+  filter(scaled_likelihood > 0.95)
+```
+1578/1657 were assigned to the correct reporting unit > 0.95 likelihood (95.2%)
+```{r}
+1578/1657
+```
+
+What about high-confidence misassignments?
+```{r}
+ref_self %>%
+  filter(inferred_repunit != repunit) %>%
+  filter(scaled_likelihood > 0.95) %>%
+  arrange(desc(scaled_likelihood)) %>%
+  #filter(z_score > -2 & z_score < 2) %>%
+  filter(!collection %in% c("carnatus", "chrysomelas")) %>%
+  select(-missing_loci) %>%
+  write_csv("csv_outputs/baseline_misassignments95.csv")
+```
+There are 9 high confidence misassignments, some of which are the poor quality southern CA species and the species for which we have very few samples. 
+
+Does the other simulator sample assign to itself?
+```{r}
+ref_self %>%
+  #filter(inferred_repunit == repunit) %>%
+  filter(scaled_likelihood > 0.5) %>%
+  filter(collection == "simulator")
+```
+
+
+
+
+
+## Not modified.
+
+modify the species affiliations for those samples in the two_column format file:
+```{r}
+# two_col2 <- two_col %>%
+#   mutate(repunit = ifelse(indiv == "R035252", "caurinus", repunit)) %>%
+#   mutate(repunit = ifelse(indiv %in% c("NT13L0002", "NT13L0004", "NT13L0005"), "levis", repunit)) %>%
+#   mutate(collection = repunit)
+```
+Now, in theory, I could re-run the dataset through the self-assignment with this new set of labels and reduce the % misassignments. 
+
+First I should decide if there are other misassignments where the meta data is likely incorrect. 
+
+## New self-assignment
+With a few species identities switched revised based on the previous self-assignment iteration.
+```{r}
+# perform self-assignment of reference samples
+ref_self2 <- self_assign(two_col2, gen_start_col = 5)
+
+# and take a quick look at those assignments
+ref_self2 %>%
+  filter(inferred_repunit == repunit) %>%
+  filter(scaled_likelihood > 0.95)
+```
+```{r}
+1670/1748
+```
+
+misassignments?
+```{r}
+ref_self2 %>%
+  filter(inferred_repunit != repunit) %>%
+  filter(scaled_likelihood > 0.95) %>%
+  select(indiv, collection, inferred_collection, scaled_likelihood, z_score) %>%
+  filter(!collection %in% c("carnatus", "chrysomelas"))
+
+```
+
+This copper that assigned to gopher could easily be a meta data error:
+```{r}
+genos %>%
+  filter(NMFS_DNA_ID == "R013353")
+```
+Yeah, from GTseq run 11, I'll go ahead and drop that one? Or better to explain?
+
+```{r}
+no_hi_missers %>%
+  filter(species == "chlorostictus") %>%
+  select(id) %>%
+  unique()
+```
+helvomaculatus = 6 samples (mis-assigned/assigned-to)
+brevispins = 1 sample (mis-assigned)
+rosaceus = 19 (assigned-to)
+simulator = 3 (mis-assigned)
+ensifer = 19 (assigned-to)
+chlorostictus = 15 (assigned-to)
+
+
+## other assignments
+```{r other-assignments}
+# between 50-95% likelihood
+ref_self2 %>%
+  filter(inferred_repunit != repunit) %>%
+  filter(scaled_likelihood > 0.5 & scaled_likelihood < 0.95) %>%
+  arrange(desc(scaled_likelihood))
+```
+All 25 of the mis-assignments between 50-95% likelihood are gopher/black-and-yellow.
+
+
+```{r z-scores}
+ref_self2 %>%
+  filter(inferred_repunit != repunit) %>%
+  filter(scaled_likelihood > 0.5) %>%
+  arrange(z_score)
+```
+For example, -41, -14, and -12 are all enormous z-scores.
+
+Also, dallii, babcocki, simulator, helvomaculatus, and brevispinis all have very few samples in the baseline. 
+
+Quick look at assignments to rosaceus:
+```{r z-scores}
+ref_self2 %>%
+  filter(inferred_repunit != repunit) %>%
+  filter(scaled_likelihood > 0.5) %>%
+  filter(inferred_collection == "rosaceus")
+```
+Those aren't terribly close, but with these data, then maybe?
+
+## PCA
+
+```{r}
+two_col2 %>% head()
+```
+
+
+
+
+
+
+
+
+
+
+
+How many are gopher/black-and-yellow?
+```{r}
+ref_self %>%
+  filter(inferred_repunit != repunit) %>%
+  filter(scaled_likelihood > 0.5) %>%
+  arrange(z_score) %>%
+  filter(collection == "carnatus" | collection == "chrysomelas")
+```
+So, 33 of 51 are GBY.
+That is 65% of the incorrectly assigned fish.
+
+What about a summary of all assignments?
+```{r hi-confidence}
+hi_assign <- ref_self %>%
+  filter(scaled_likelihood > 0.95) %>%
+  group_by(inferred_collection) %>%
+  tally() %>%
+  arrange(n) %>%
+  rename(samples_assigned_95 = n) #%>%
+  # right_join(., meta_spp, by = c("inferred_collection" = "species"))
+
+```
+
+```{r all-assign}
+ref_self %>%
+  filter(scaled_likelihood > 0.5) %>%
+  group_by(inferred_collection) %>%
+  tally() %>%
+  arrange(n) %>%
+  rename(samples_assigned_50 = n) %>%
+  right_join(., meta_spp, by = c("inferred_collection" = "species")) %>%
+  left_join(., hi_assign) %>%
+  select(inferred_collection, n, samples_assigned_95, samples_assigned_50) %>%
+  rename(species = inferred_collection) %>%
+  write_csv("csv_outputs/sebastes_assignments.csv")
+
+```
+
+
+## GBY repunit
+Let's make a single repunit for gopher/black-and-yellow and look at assignment again in that context.
+
+
+
+
+
+## VCF sample species
+
+I added some AK and southern CA species to the baseline VCF from GTseq runs 65/66. Now I want to see which species those were so that I can create a table for the manuscript.
+
+```{r read-in-bamlist}
+bams <- read_csv("~/Desktop/sebastes_sppID/gtseq65_66_bamlist_samples.csv", col_names = FALSE) %>%
+  rename(ids = X1)
+
+new_vcf <- bams %>%
+  left_join(., labels1, by = c("ids" = "id")) %>%
+  group_by(species) %>%
+  tally() %>%
+  rename(VCF_samples = n, Species = species)
+```
+
+From Hayley's VCF:
+```{r}
+vcf <- read_csv("~/Desktop/sebastes_sppID/Manuscript_draft/vcf_samples.csv")
+```
+
+Combine the two:
+```{r}
+vcf %>%
+  bind_rows(., new_vcf) %>%
+  arrange(Species) %>%
+  group_by(Species) %>%
+  summarise(total_samples = sum(VCF_samples)) %>%
+  write_csv("csv_outputs/spp_vcf_summary.csv")
+```
+

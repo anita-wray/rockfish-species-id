@@ -11,12 +11,16 @@ library(stringr)
 library(readxl)
 library(rubias)
 
-#meta <- readRDS("../data/processed/meta-data-tibble.rds") # not worrying about meta data right now...
+meta <- readRDS("../../nsf-kelp-rockfish-ckmr/data/processed/meta-data-tibble.rds") %>%
+  filter(REPORTED_LIFE_STAGE != "Extrusion Larvae") %>% # remove the extrustion larvae
+  filter(REPORTED_LIFE_STAGE != "Adult") %>% # these are mothers for the larvae
+  filter(REPORTED_LIFE_STAGE != "ADULT") %>% # just the juveniles for this analysis
+  filter(SPECIES != "melanops") # no black rockfish for this.
+
 genos <- readRDS("../nsf_data/processed/called_genos_na_explicit.rds") %>%
   filter(NMFS_DNA_ID != "Morin") # remove the data for Phil Morin
-samples <- readRDS("../nsf_data/processed/sample-sheet-tibble.rds") #%>%
-  #filter(NMFS_DNA_ID %in% meta$NMFS_DNA_ID)
-  
+samples <- readRDS("../nsf_data/processed/sample-sheet-tibble.rds") %>%
+  filter(NMFS_DNA_ID %in% meta$NMFS_DNA_ID)
 ```
 
 ## Some initial filters
@@ -52,6 +56,22 @@ geno_one_each <- genos %>%
 ```
 
 
+```{r}
+# how many sample genotypes now?
+geno_one_each %>%
+  inner_join(., samples, by = "NMFS_DNA_ID") %>%
+  select(NMFS_DNA_ID) %>%
+  unique()
+```
+```{r}
+# which means duplicate samples for how many?
+samples %>%
+  group_by(NMFS_DNA_ID) %>%
+  tally() %>%
+  arrange(desc(n))
+```
+12 fish genotyped 2x.
+
 ### Remove the 6 loci which Hayley has been removing
 
 ```{r remove-loci}
@@ -63,6 +83,17 @@ keepers <- geno_one_each %>%
   anti_join(., to_remove, by = "locus")
 ```
 that should leave 90 loci  
+
+```{r how-many-now}
+unique_ids <- samples %>%
+  select(NMFS_DNA_ID) %>%
+  unique()
+
+keepers <- keepers %>%
+  inner_join(., unique_ids)
+
+```
+
 
 ### Toss out indivs with data at fewer than 25 loci
 Now, toss out any individual with fewer than 25 non-missing loci
@@ -131,7 +162,6 @@ alleles <- bind_rows(spp.id2, no_hi_missers3)
 ```
 
 
-
 Here we turn alleles into integers, spread the data frame, and then get it into the right format to run rubias:
 ```{r spread-genos}
 # first make integers of the alleles
@@ -162,14 +192,36 @@ I'll split the data frame that I created (but it needed to be bunged together fo
 sp_mix <- two_col %>%
   filter(sample_type == "mixture")
 
+# sp_mix %>%
+#   write_csv("csv_outputs/nsf-mixture-two-col-rubias.csv") # this was for the PCA
+
 sp_ref <- two_col %>%
   filter(sample_type == "reference")
+
+# how many gopher v. black-and-yellow rockfishes are in the reference file?
+sp_ref %>%
+  filter(repunit %in% c("Scarnatus", "Schrysomelas")) %>% # 350 combined.
+  filter(repunit == "Schrysomelas") # 110 of them are black-and-yellow.
 ```
+
+Experiment with equalizing the number of gopher/black-and-yellow rockfish in the reference file. Let's do 110 of each.
+```{r equalize-ref-gby}
+gopher_ref <- sp_ref %>%
+  filter(repunit == "Scarnatus") %>%
+  sample_n(110, replace = FALSE)
+
+# now create a reference that removes gopher from the reference and then put back just the 110 we want
+spp_reference <- sp_ref %>%
+  filter(repunit != "Scarnatus") %>%
+  bind_rows(., gopher_ref)
+
+```
+
 
 Now, with the two data frames separated, run the `infer mixture` analysis:
 ```{r run-mixture}
 # perform mixture-assignment on baseline colony samples
-mix_assign <- infer_mixture(reference = sp_ref, mixture = sp_mix, gen_start_col = 5, method = "MCMC", reps = 2000, burn_in = 100)
+mix_assign <- infer_mixture(reference = spp_reference, mixture = sp_mix, gen_start_col = 5, method = "MCMC", reps = 2000, burn_in = 100)
 
 # That was fast, let's take a look
 head(mix_assign)
@@ -178,63 +230,66 @@ head(mix_assign)
 mix_assign$indiv_posteriors %>%
   arrange(desc(log_likelihood))
 
-# look at the fish that were assigned with 95% confidence
-nsf_assignments <- mix_assign$indiv_posteriors %>%
-  filter(PofZ > 0.95) 
-
-grp_tally <- nsf_assignments[,-10] %>% # drop the missing loci column 
-  filter(z_score > -2 & z_score < 2) %>% # only within 2 standard deviations
+# look at the fish that were assigned with > 50% confidence
+mix_assign$indiv_posteriors %>%
+  filter(PofZ > 0.5) %>%
   group_by(repunit) %>%
-  tally()
-  #write_csv("../nsf_data/spp_assignments_1-PofZ_zscore2.csv")
-
-grp_tally2 <- grp_tally %>%
+  tally() %>%
   arrange(desc(n)) %>%
-  filter(n > 1)
-  
+  write_csv("csv_outputs/nsf-PofZ-50.csv")
+ 
+# What about at higher confidence?
+# PofZ > 0.99
+mix_assign$indiv_posteriors %>%
+  filter(PofZ > 0.99) %>%
+  group_by(repunit) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  write_csv("csv_outputs/nsf-PofZ-99.csv")
+
 ```
 The posterior means of group membership in each collection is in the PofZ column.
 
 Make a quick little plot to display the diversity of species in our NSF juvenile samples.
 ```{r quick-plot}
 # ordered by number of samples
-ggplot(grp_tally2, (aes(x = reorder(repunit, -n), y = n))) + 
-  geom_bar(stat = "identity") +
-  theme_bw() +
-  ylab("Samples") +
-  xlab("Species") +
-  theme(
-    axis.text.x = element_text(angle = 45, size = 16),
-    axis.text.y = element_text(size = 16),
-    axis.title = element_text(size = 18)) +
-  scale_color_brewer(palette = "Set1")
-
-  
-ggsave("pdf_outputs/nsf_juv_id.pdf", height = 7, width = 12)
+# ggplot(grp_tally2, (aes(x = reorder(repunit, -n), y = n))) + 
+#   geom_bar(stat = "identity") +
+#   theme_bw() +
+#   ylab("Samples") +
+#   xlab("Species") +
+#   theme(
+#     axis.text.x = element_text(angle = 45, size = 16),
+#     axis.text.y = element_text(size = 16),
+#     axis.title = element_text(size = 18)) +
+#   scale_color_brewer(palette = "Set1")
+# 
+#   
+# ggsave("pdf_outputs/nsf_juv_id.pdf", height = 7, width = 12)
 ```
 
 ```{r}
 # Now just the non-KGBC
-grp_tally2 %>%
-  filter(repunit != "Satrovirens" & repunit != "Scarnatus" & repunit != "Schrysomelas" & repunit !="Scaurinus") %>%
-  ggplot((aes(x = reorder(repunit, -n), y = n))) + 
-  geom_bar(stat = "identity") +
-  theme_bw() +
-  ylab("Samples") +
-  xlab("Species") +
-  theme(
-    axis.text.x = element_text(angle = 45, size = 16),
-    axis.text.y = element_text(size = 16),
-    axis.title = element_text(size = 18)) +
-  scale_color_brewer(palette = "Set1")
-
-
-ggsave("pdf_outputs/non_kgbc_juv_id.pdf", height = 7, width = 10)
-
-
-grp_tally2 %>%
-  filter(repunit != "Satrovirens" & repunit != "Scarnatus" & repunit != "Schrysomelas" & repunit !="Scaurinus") %>% ungroup %>%
-  arrange(desc(n))
+# grp_tally2 %>%
+#   filter(repunit != "Satrovirens" & repunit != "Scarnatus" & repunit != "Schrysomelas" & repunit !="Scaurinus") %>%
+#   ggplot((aes(x = reorder(repunit, -n), y = n))) + 
+#   geom_bar(stat = "identity") +
+#   theme_bw() +
+#   ylab("Samples") +
+#   xlab("Species") +
+#   theme(
+#     axis.text.x = element_text(angle = 45, size = 16),
+#     axis.text.y = element_text(size = 16),
+#     axis.title = element_text(size = 18)) +
+#   scale_color_brewer(palette = "Set1")
+# 
+# 
+# ggsave("pdf_outputs/non_kgbc_juv_id.pdf", height = 7, width = 10)
+# 
+# 
+# grp_tally2 %>%
+#   filter(repunit != "Satrovirens" & repunit != "Scarnatus" & repunit != "Schrysomelas" & repunit !="Scaurinus") %>% ungroup %>%
+#   arrange(desc(n))
 
 
 
@@ -253,7 +308,9 @@ kept_assignments <- mix_assign$indiv_posteriors %>%
   filter(PofZ > 0.5) %>%
   arrange(desc(PofZ))
 
-kept_assignments
+kept_assignments %>%
+  select(-missing_loci) %>%
+  write_csv("csv_outputs/nsf-PofZ-0.5_assignments.csv")
 ```
 
 ## Picking out the gopher, black-and-yellow, and copper rockfishes
@@ -262,18 +319,78 @@ Interesting to see all the other species in there - mostly china and quillback. 
 
 But what we actually want is a list of NMFS IDs for the fish assigned to gopher, black-and-yellow, and copper, which we can then use to select those fish from our NSF dataset, where we presumably have many more alleles for those species because the VCF used to call genotypes included hundreds of samples for each of those species.
 
-This dataset includes 12,741 samples.
+This dataset includes 12,002 samples.
 ```{r}
  mix_assign$indiv_posteriors %>%
-  group_by(indiv) %>%
-  filter(PofZ > 0.5) %>% # keep all potential assignments to check again with GSI SIM in the nsf workflow
-  filter(collection %in% c("Scarnatus", "Schrysomelas", "Scaurinus")) %>%
-  select(indiv) %>%
+  #group_by(indiv) %>%
+  filter(PofZ > 0.99) %>% 
+  filter(collection %in% c("Scarnatus", "Schrysomelas")) %>%
+  select(-missing_loci) %>%
   rename(NMFS_DNA_ID = indiv) %>%
-  write_csv("csv_outputs/nsf-GBYC-samples-ids.csv")
-
+  write_csv("csv_outputs/nsf-GBY-PofZ99.csv")
   
 ```
-That's 7,519 samples.
+
+And for coppers, a separate list.
+```{r}
+mix_assign$indiv_posteriors %>%
+  group_by(indiv) %>%
+  filter(PofZ > 0.5) %>% # keep all potential assignments to check again with GSI SIM in the nsf workflow
+  filter(collection == "Scaurinus") %>%
+  select(indiv) %>%
+  rename(NMFS_DNA_ID = indiv) %>%
+  write_csv("csv_outputs/nsf-copper-samples-ids.csv")
+
+```
+
+### Check the assignment probabilities of the new pairs
+
+When I reanalyzed the gopher/black-and-yellow pairs without the gsi sim > 99 score threshold, I found an additional 5 matches. Since we know they are not non-target species thanks to the rubias species identification analysis, I want to look at what their PofZ scores before including them in my results.
+
+```{r}
+# read in the new matches
+matches <- read_csv("../../nsf-gopher-black-and-yellow/Rmd/csv_outputs/extra_gby_sibs.csv")
+```
+
+
+```{r}
+sp_assignments <- mix_assign$indiv_posteriors %>%
+  group_by(indiv) %>%
+  filter(PofZ > 0.5) 
+```
+
+
+```{r}
+matches %>%
+  left_join(., sp_assignments, by = c("name1" = "indiv")) %>%
+  left_join(., sp_assignments, by = c("name2" = "indiv")) %>%
+  select(name1, name2, repunit.x, PofZ.x, repunit.y, PofZ.y)
+
+```
+Of these five matches, there are three that come up as gopher-gopher pretty solidly. Furthermore, two of those three they have a PofZ for each individual > 0.99.
+
+Those are in.
+
+So for the remaining three matches, I think I might be inclined to include the one that is gopher-gopher with one individual with a PofZ > 0.90, but not the two matches that include one gopher and one black-and-yellow sib?
+
+Let me look at the overall PofZ for those samples to make sure it's just gopher/black-and-yellow
+```{r}
+mix_assign$indiv_posteriors %>%
+  group_by(indiv) %>%
+  filter(indiv == "R026051") %>%
+  arrange(desc(PofZ)) %>%
+  filter(PofZ > 0.01)
+```
+For that sample, the assignment is to gopher/black-and-yellow. 
+What about the next one?
+```{r}
+mix_assign$indiv_posteriors %>%
+  group_by(indiv) %>%
+  filter(indiv == "R026909") %>%
+  arrange(desc(PofZ)) %>%
+  filter(PofZ > 0.01)
+
+```
+Same with this one.
 
 
