@@ -1,0 +1,269 @@
+---
+title: "02-test-pca-w-unknowns"
+output: html_notebook
+---
+
+14 December 2022
+
+
+Testing individual-based analyses (pca) with unknown samples from AK.
+
+
+The haplotype file for the baseline samples comes from `10-complete-downsamp-self...`
+
+
+I'll read in the baseline data and the unknown data, then filter both appropriately (missing data), and try reformating the dataframe and then converting it to a genid object for adegenet.
+
+
+
+```{r load-libraries}
+library(tidyverse)
+library(adegenet)
+library(ape)
+library(pegas)
+library(RColorBrewer)
+library(stringr)
+library(rubias)
+
+```
+
+
+
+```{r load-data}
+# baseline data - curated, 997 indivs
+baseline <- readRDS("../new_baseline_data/processed/sebastes_spp_id_baseline_haplotypes.rds")
+
+# remove the 6 loci that had HWE and other issues
+to_remove <- read_csv("../data/loci_to_remove.csv")
+
+baseline90 <- baseline %>%
+  anti_join(., to_remove)
+```
+
+
+
+```{r load-data-unkn}
+# unknowns
+test1 <- read_csv("test1_reported_diploid_haplotype.csv") %>%
+  select(-X1, -ar)
+
+test.df <- test1 %>%
+  select(-read.depth.1, -read.depth.2) %>%
+  pivot_longer(4:5, names_to = "haplotype", values_to = "allele") %>%
+  #pivot_longer(4:5, names_to = "reads", values_to = "depth") %>%
+  #select(-haplotype) %>%
+  separate(col = haplotype, sep = "\\.", into = c("x", "gene_copy"), remove = T) %>%
+  select(-x) %>%
+  unique() %>%
+  rename(indiv = indiv.ID, species = group) %>%
+  select(species, indiv, locus, gene_copy, allele)
+
+test.df$gene_copy <- as.numeric(test.df$gene_copy)
+```
+
+
+```{r}
+test.df
+```
+
+
+```{r}
+# fill in NAs for the loci that are missing from the unknowns df
+unkn <- test.df %>%
+  select(indiv) %>%
+  unlist() %>%
+  unname() %>%
+  expand.grid(indiv = ., locus = unique(baseline90$locus), gene_copy = 1:2, stringsAsFactors = FALSE) %>%
+  tbl_df() %>%
+  left_join(., test.df) %>%
+  arrange(indiv, locus, gene_copy, allele) %>%
+  unique() %>%
+  mutate(species = "sebastes_spp")
+
+```
+It looks like there might be some mismatches in names between the fasta file and the vcf - specifically with the "Plate" loci from ESTs.
+
+```{r}
+#missing data/loci?
+unkn %>%
+  group_by(indiv, locus) %>%
+  tally() %>%
+  filter(n != 2)
+
+```
+That worked well enough for most loci... at least to test for now.
+
+```{r}
+# unkn_format <- test.df %>%
+#   pivot_wider(names_from = gene_copy, values_from = haplo) %>%
+#   group_by(indiv.ID, locus) %>%
+#   #mutate(allele.balance = ifelse(`1` == `2`, NA, allele.balance)) %>%
+#   pivot_longer(cols = 9:10, names_to = "gene_copy", values_to = "allele") %>%
+#   select(indiv.ID, locus, gene_copy, allele, depth, allele.balance) %>%
+#   #mutate(allele.balance = ifelse(gene_copy == 1, 1, NA)) %>%
+#   mutate(species = "sebastes_spp") %>%
+#   rename(indiv = indiv.ID)
+# 
+# unkn_format$gene_copy <- as.numeric(unkn_format$gene_copy)
+# 
+# unkn_format %>%
+#   group_by(indiv, locus) %>%
+#   tally() %>%
+#   filter(n >2)
+```
+
+
+```{r}
+# slim that down for the pca
+baseline_for_combo <- baseline90 %>%
+  select(-collection, -gtseq_run, -id, -repunit, -sample_type, -allele.balance, -depth) %>%
+  select(species, indiv, locus, gene_copy, allele) %>%
+  filter(indiv != "R001570")
+
+baseline_for_combo 
+```
+
+
+```{r}
+# and combine the baseline with unknowns
+merged_df <- bind_rows(baseline_for_combo, unkn)
+
+
+merged_df %>%
+  filter(str_detect(indiv, "s"))
+```
+
+
+
+
+### Toss out indivs with missing data at more than 25 loci
+Now, toss out any individual with fewer than 65 non-missing loci
+```{r toss-missers}
+no_hi_missers <- merged_df %>% 
+  group_by(indiv) %>%
+  filter(sum(!is.na(allele)) >= (65*2))
+
+
+# samples that were tossed?
+merged_df %>% 
+  group_by(indiv) %>%
+  filter(sum(is.na(allele)) >= (65*2)) %>%
+  select(indiv) %>%
+  unique()
+
+
+
+# distribution of missing data?
+merged_df %>%
+  group_by(indiv) %>%
+  filter(is.na(allele)) %>%
+  tally() %>%
+  filter(str_detect(indiv, "s"))
+```
+20 of the unknowns had too much missing data at this point. I'll go back to the fastq files and vcf to figure out the locus-name mismatch issue.
+
+```{r}
+merged_df %>%
+  group_by(indiv, locus) %>%
+  tally() %>%
+  filter(n>2) %>%
+  left_join(., merged_df)
+```
+
+
+In the meantime, let's move forward with the analysis.
+
+```{r}
+# first make integers of the alleles
+alle_idxs <- merged_df %>% 
+  dplyr::select(indiv, locus, gene_copy, allele) %>%
+  group_by(locus) %>%
+  mutate(alleidx = as.integer(factor(allele, levels = unique(allele)))) %>%
+  ungroup() %>%
+  arrange(indiv, locus, alleidx) # rubias can handle NA's, so no need to change them to 0's
+
+# select just the columns to retain 
+#alle_idx2 <- alle_idxs[,-7]
+  
+# and spread the alleles
+two_col <- alle_idxs %>%
+  #group_by(indiv, locus) %>%
+  unite(loc, locus, gene_copy, sep = ".") %>%
+  #ungroup() %>%
+  select(-allele) %>%
+  pivot_wider(names_from = loc, values_from = alleidx) 
+  
+```
+
+Add the species info back on
+```{r}
+spp_indiv <- merged_df %>%
+  select(species, indiv) %>%
+  unique()
+
+two_col_spp <- two_col %>%
+  left_join(., spp_indiv) %>%
+  select(species, everything())
+  
+
+
+```
+
+
+
+
+## can come back here for pca?
+
+Look at assignment, quickly:
+
+
+I'll split the data frame that I created (but it needed to be bunged together for the conversion of alleles to integers).
+
+```{r}
+rubias_format <- two_col_spp %>%
+  mutate(sample_type = ifelse(str_detect(indiv, "R"), "reference", "mixture")) %>%
+  mutate(repunit = ifelse(sample_type == "reference", species, NA)) %>%
+  rename(collection = species) %>%
+  select(sample_type, repunit, collection, everything())
+
+```
+
+
+
+```{r split-frames}
+# split up the reference and mixture data frames
+sp_mix <- rubias_format %>%
+  filter(sample_type == "mixture")
+
+sp_ref <- rubias_format %>%
+  filter(sample_type == "reference")
+```
+
+
+```{r run-rubias}
+
+rubias_output <- infer_mixture(reference = sp_ref, mixture = sp_mix, gen_start_col = 5)
+
+
+```
+
+
+```{r}
+rubias_output$indiv_posteriors %>%
+  filter(PofZ > 0.90) 
+
+```
+Whelp, the z-scores again suggest that we don't have the target species in our baseline.
+
+```{r}
+# distribution of z-scores
+
+rubias_output$indiv_posteriors %>%
+  filter(PofZ > 0.90) %>%
+  ggplot(aes(x = z_score)) +
+  geom_histogram()
+
+```
+
+
+
