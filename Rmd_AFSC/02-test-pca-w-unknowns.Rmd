@@ -24,6 +24,8 @@ library(pegas)
 library(RColorBrewer)
 library(stringr)
 library(rubias)
+library(radiator)
+library(DescTools)
 
 ```
 
@@ -44,8 +46,11 @@ baseline90 <- baseline %>%
 
 ```{r load-data-unkn}
 # unknowns
-test1 <- read_csv("test1_reported_diploid_haplotype.csv") %>%
+test1 <- read_csv("sebastes_larvae1_reported_diploid_haplotype.csv") %>%
   select(-X1, -ar)
+
+# test1 <- read_csv("krista_sebastes_reported_diploid_haplotype.csv") %>%
+#   select(-X1, -ar)
 
 test.df <- test1 %>%
   select(-read.depth.1, -read.depth.2) %>%
@@ -63,18 +68,13 @@ test.df$gene_copy <- as.numeric(test.df$gene_copy)
 
 
 ```{r}
-test.df
-```
-
-
-```{r}
 # fill in NAs for the loci that are missing from the unknowns df
 unkn <- test.df %>%
   select(indiv) %>%
   unlist() %>%
   unname() %>%
   expand.grid(indiv = ., locus = unique(baseline90$locus), gene_copy = 1:2, stringsAsFactors = FALSE) %>%
-  tbl_df() %>%
+  as_tibble() %>%
   left_join(., test.df) %>%
   arrange(indiv, locus, gene_copy, allele) %>%
   unique() %>%
@@ -83,15 +83,21 @@ unkn <- test.df %>%
 ```
 It looks like there might be some mismatches in names between the fasta file and the vcf - specifically with the "Plate" loci from ESTs.
 
-```{r}
-#missing data/loci?
-unkn %>%
-  group_by(indiv, locus) %>%
-  tally() %>%
-  filter(n != 2)
-
-```
 That worked well enough for most loci... at least to test for now.
+
+
+Take another look at missing data
+```{r}
+unkn %>%
+  filter(is.na(allele)) %>%
+  group_by(locus) %>%
+  tally() %>%
+  arrange(desc(n))
+```
+
+
+
+
 
 ```{r}
 # unkn_format <- test.df %>%
@@ -160,16 +166,6 @@ merged_df %>%
   tally() %>%
   filter(str_detect(indiv, "s"))
 ```
-20 of the unknowns had too much missing data at this point. I'll go back to the fastq files and vcf to figure out the locus-name mismatch issue.
-
-```{r}
-merged_df %>%
-  group_by(indiv, locus) %>%
-  tally() %>%
-  filter(n>2) %>%
-  left_join(., merged_df)
-```
-
 
 In the meantime, let's move forward with the analysis.
 
@@ -204,15 +200,8 @@ spp_indiv <- merged_df %>%
 two_col_spp <- two_col %>%
   left_join(., spp_indiv) %>%
   select(species, everything())
-  
-
 
 ```
-
-
-
-
-## can come back here for pca?
 
 Look at assignment, quickly:
 
@@ -231,7 +220,7 @@ rubias_format <- two_col_spp %>%
 
 
 ```{r split-frames}
-# split up the reference and mixture data frames
+#split up the reference and mixture data frames
 sp_mix <- rubias_format %>%
   filter(sample_type == "mixture")
 
@@ -241,23 +230,24 @@ sp_ref <- rubias_format %>%
 
 
 ```{r run-rubias}
-
 rubias_output <- infer_mixture(reference = sp_ref, mixture = sp_mix, gen_start_col = 5)
-
 
 ```
 
 
 ```{r}
 rubias_output$indiv_posteriors %>%
-  filter(PofZ > 0.90) 
+  filter(PofZ > 0.95) %>%
+  group_by(collection) %>%
+  tally()
 
 ```
-Whelp, the z-scores again suggest that we don't have the target species in our baseline.
+
+
+
 
 ```{r}
-# distribution of z-scores
-
+#distribution of z-scores
 rubias_output$indiv_posteriors %>%
   filter(PofZ > 0.90) %>%
   ggplot(aes(x = z_score)) +
@@ -267,3 +257,159 @@ rubias_output$indiv_posteriors %>%
 
 
 
+Grab the POP to look them individually in a PCA
+```{r}
+pop_larvae <- rubias_output$indiv_posteriors %>%
+  filter(PofZ > 0.95, 
+         collection %in% c("alutus", "polyspinis")) %>%
+  select(indiv, collection)
+
+```
+
+
+
+
+### PCA
+
+
+```{r}
+# create vectors of indivs and species
+spp_labels <- two_col_spp$species
+indivs <- two_col_spp$indiv
+
+```
+
+
+```{r}
+# make factor?
+two_col_spp$species <- factor(two_col_spp$species)
+```
+
+
+Make the df match the requirements for tidy_genomic_data
+```{r}
+long_df <- alle_idxs %>%
+  select(-allele, -gene_copy) %>%
+  left_join(., spp_indiv) %>%
+  select(species, everything()) %>%
+  rename(INDIVIDUALS = indiv, STRATA = species, MARKERS = locus, GT = alleidx)
+
+```
+
+Genotypes should be coded with 3 integers for each alleles. 6 integers in total for the genotypes. e.g. 001002 or 111333 (for heterozygote individual). 6 integers WITH separator: e.g. 001/002 or 111/333 (for heterozygote individual). The separator can be any of these: "/", ":", "_", "-", ".", and will be removed.
+
+
+```{r}
+#library("DescTools")
+
+# create 3 digit integers from the genotypes
+long_df$GT3 <- Format(long_df$GT, ldigits = 3, digits = 0)
+
+head(long_df)
+
+# NAs hold
+# long_df %>%
+#   filter(is.na(GT3))
+
+# fix NAs
+long_df0s <- long_df %>%
+  mutate(GT3 = ifelse(is.na(GT3), "000", GT3))
+```
+
+Now combine the GT3 column per indiv/marker:
+
+```{r}
+# make the genos characters and then try pasting them as strings
+long_df0s$GT3 <- as.character(long_df0s$GT3)
+
+long_df3digit <- long_df0s %>%
+  group_by(INDIVIDUALS, MARKERS) %>% 
+  arrange(GT3, .by_group = TRUE) %>% 
+  summarise(GENOTYPE = toString(GT3))
+  
+# paste strings together
+long_df3digit$GENOTYPE <- gsub(", ","",long_df3digit$GENOTYPE)
+
+
+# add back on species identity as strata
+df_for_conversion <- long_df0s %>% 
+  select(-GT, -GT3) %>%
+  left_join(., long_df3digit) %>%
+  unique() %>%
+  rename(GT = GENOTYPE) %>%
+  mutate(GT = ifelse(GT == "000000", NA, GT))
+
+df_for_conversion$STRATA <- as.factor(df_for_conversion$STRATA)
+
+# check on NAs here
+df_for_conversion %>%
+  filter(str_detect(INDIVIDUALS, "s"))
+```
+
+
+
+
+```{r convert-df-to-genind}
+# use the radiator package for this conversion
+genind_df <- write_genind(df_for_conversion)
+```
+
+
+
+Now that the data is a genind object, go ahead and run the PCA.
+
+Make PCA
+```{r dataset-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+datasetX <- tab(genind_df, NA.method="mean") # double check that is this the appropriate method.
+
+# make PCA
+dataset_pca1 <- dudi.pca(datasetX, center = TRUE, scannf = FALSE, scale=FALSE, nf = 1000)
+
+# colors
+mycol <- colorRampPalette(c("palegreen", "darkolivegreen", "darkslategrey", "darkgreen", "deepskyblue", "aquamarine4", "seagreen4", "cadetblue", "cyan", "darkblue", "midnightblue", "blue", "dodgerblue", "darkcyan", "darkslateblue", "slateblue", "steelblue4", "skyblue", "paleturquoise4", "brown", "royalblue", "purple4", "orange", "darkorange", "darkgoldenrod", "chocolate", "tan4", "saddlebrown", "sienna", "navajowhite4", "darkgray", "black", "pink"))(55)
+
+# plot with factor labels
+pdf("pdf_outputs/sebastes_larvae1_baseline_pca.pdf", width = 10, height = 10)
+s.class(dataset_pca1$li, fac=pop(genind_df), wt = rep(1, length(pop(genind_df))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(mycol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
+
+
+
+## make PCA with POP larvae
+
+```{r}
+pop_for_genind <- pop_larvae %>%
+  left_join(., df_for_conversion, by = c("indiv" = "INDIVIDUALS")) %>%
+  rename(INDIVIDUALS = indiv) %>%
+  select(-STRATA) %>%
+  rename(STRATA = collection)
+
+pop_genind <- write_genind(pop_for_genind)
+
+```
+
+
+Make PCA
+```{r pop-pca}
+# Allele presence absence data are extracted and NAs replaced using tab:
+pop.data <- tab(pop_genind, NA.method="mean") # double check that is this the appropriate method.
+
+# make PCA
+pop_pca1 <- dudi.pca(pop.data, center = TRUE, scannf = FALSE, scale=FALSE, nf = 1000)
+
+# colors
+mycol <- colorRampPalette(c("coral", "darkolivegreen", "darkslategrey", "darkgreen", "deepskyblue", "aquamarine4", "seagreen4", "cadetblue", "cyan", "darkblue", "midnightblue", "blue", "dodgerblue", "darkcyan", "darkslateblue", "slateblue", "steelblue4", "skyblue", "paleturquoise4", "brown", "royalblue", "purple4", "orange", "darkorange", "darkgoldenrod", "chocolate", "tan4", "saddlebrown", "sienna", "navajowhite4", "darkgray", "black", "pink"))(55)
+
+# plot with factor labels
+pdf("pdf_outputs/pop_larvae1_pca.pdf", width = 10, height = 10)
+s.class(pop_pca1$li, fac=pop(pop_genind), wt = rep(1, length(pop(pop_genind))), clabel = .8, grid = FALSE, cellipse = 2,
+        xax=1, yax=2, col=transp(mycol,.8),
+        axesel=FALSE, cstar=0, cpoint=1)
+dev.off()
+
+```
