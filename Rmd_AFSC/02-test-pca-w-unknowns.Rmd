@@ -46,11 +46,8 @@ baseline90 <- baseline %>%
 
 ```{r load-data-unkn}
 # unknowns
-test1 <- read_csv("sebastes_larvae1_reported_diploid_haplotype.csv") %>%
+test1 <- read_csv("microhaplot_outputs/sebastes_larvae1_reported_diploid_haplotype.csv") %>%
   select(-X1, -ar)
-
-# test1 <- read_csv("krista_sebastes_reported_diploid_haplotype.csv") %>%
-#   select(-X1, -ar)
 
 test.df <- test1 %>%
   select(-read.depth.1, -read.depth.2) %>%
