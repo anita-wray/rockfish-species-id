@@ -24,6 +24,8 @@ library(pegas)
 library(RColorBrewer)
 library(stringr)
 library(rubias)
+# if (!require("devtools")) install.packages("devtools")
+# devtools::install_github("thierrygosselin/radiator")
 library(radiator)
 library(DescTools)
 
