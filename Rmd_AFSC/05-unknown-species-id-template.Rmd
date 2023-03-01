@@ -288,6 +288,16 @@ spp_id_w_knowns %>%
 ggsave("pdf_outputs/known_sebastes_POP_dusky_northern_sppID.pdf", height = 5, width = 5)
 ```
 
+```{r}
+spp_id_w_knowns %>%
+  select(-missing_loci) %>%
+  write_csv("csv_outputs/known_northern_POP_dusky_rubias_id.csv")
+
+spp_id_w_knowns %>%
+  filter(SpeciesName == "Sebastes polyspinis")
+```
+
+
 That actually makes me feel considerably better about the assignment. The z-scores for Northerns look normal (and Northerns are panmictic) whereas the POP has a wider distribution (because of pop structure, likely) and the duskies are the first set of z-score outliers.
 
 In fact, we could use the z-scores to some extent, to give us a hint about the larval samples.
@@ -303,6 +313,7 @@ ggplot() +
   theme_bw() +
   labs(title = "GOA unknown larvae - Sebastes species ID")
 
+ggsave("pdf_outputs/GOA_unknowns_w_unknownSpp.pdf")
 ```
 What was the species assignment for the -60 bunch?
 
