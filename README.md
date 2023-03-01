@@ -70,6 +70,14 @@ In order to perform Sebastes species ID…
     related species across phylogenetic distance. We can explore the
     missing data criterion in more depth, since there might be fixed
     alleles that make even a small number of loci valid for species ID.
+    
+## Species assignment
+1.  An example of species identification of a mixture of samples using
+    rubias is outlined in `Rmd_AFSC/05-unknown-species-id-template.Rmd`.
+    
+2. High and low z-scores are indicative of species (or populations of species) that were not included in the reference baseline.
 
-3.  An example of species identification of a mixture of samples using
-    rubias is outlined in `Rmd_AFSC/02-test-pca-w-unknowns.Rmd`.
+## Updating the baseline
+1. The reference baseline can be updated by genotyping additional species with the same set of primers, using the same bioinformatic workflow, and then merging VCF files from the prior baseline VCF.
+
+2. The newly merged VCF file can then be called for analysis in microhaplot.
