@@ -8,7 +8,6 @@ output: html_notebook
 
 Walkthrough of species id for unknown samples:
 
-
 Using the rds file output from microhaplot:
 1. read in rds files
 2. apply read depth filters
@@ -38,7 +37,7 @@ source("../R/rockfish-funcs2.R")
 # get the names of the files
 fdf <- read.table("../data_AFSC/rds_files/rds-file-list.txt", stringsAsFactors = FALSE, header = TRUE) %>%
   tbl_df()
-dir <- "../data_AFSC/rds_files/test/"
+dir <- "../data_AFSC/rds_files/select_for_analysis/"
 
 
 # cycle over them, read them and add the gtseq_run column on each.
@@ -230,7 +229,7 @@ top_assign %>%
 ggsave("pdf_outputs/larvae_mixed_unknowns_Zscores.pdf")
 ```
 
-I feel very weird about these z-scores. I can't decide if it's a data artifact, something awry with the VCF file, batch effects (??) or actually just species that are not present in the baseline and are potentially different species.
+These z-scores suggest that the larvae are not only species not in the baseline, but some of them are very phylogenetically different from the baseline species. 
 
 Some of that assessment depends on what the cherrypicked plates look like:
 ```{r}
@@ -313,7 +312,7 @@ ggplot() +
   theme_bw() +
   labs(title = "GOA unknown larvae - Sebastes species ID")
 
-ggsave("pdf_outputs/GOA_unknowns_w_unknownSpp.pdf")
+ggsave("pdf_outputs/GOA_unknowns_w_unknownSpp2.pdf")
 ```
 What was the species assignment for the -60 bunch?
 
@@ -342,6 +341,26 @@ normal_Zs %>%
 ```
 
 
+How many larvae from which species in the "normal" range for baseline species?
+
+```{r}
+normal_Zs %>%
+  group_by(collection) %>%
+  tally()
+
+```
+POP, northerns, quillback, redbanded, and tiger rockfishes. All reasonable.
+
+
+
+
+
+
+
+
+
+
+
 
 
 ## Check self-assignment of baseline
@@ -368,6 +387,15 @@ ggsave("pdf_outputs/baseline_zscores.pdf")
 Self-assignment looks fine. 
 
 I'm beginning to think that what we're seeing in the z-scores is (1) the population structure in POP, (2) duskies missing from the baseline, and (3) some weird species - maybe not sebastes?? in the larval collections.
+
+
+
+
+
+
+
+
+##### DO NOT MODIFY BELOW THIS LINE #####
 
 
 

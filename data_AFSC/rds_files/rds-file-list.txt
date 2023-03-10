@@ -1,0 +1,5 @@
+gtseq_run file
+gtseq3 sebastes_GOA_larvae.rds
+gtseq1 sebastes_gtseq_test1.rds
+gtseq2 sebastes_mixedPlates.rds
+gtseq4 sebastes_GOA_larvae2.rds
