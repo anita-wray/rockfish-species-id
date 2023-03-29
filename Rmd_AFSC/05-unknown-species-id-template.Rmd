@@ -1,6 +1,6 @@
 ---
 title: "unknown-species-id-template"
-output: html_notebook
+output: github_document
 ---
 
 28 February 2023
@@ -246,7 +246,7 @@ Read in some metadata to take a closer look at those samples/assignments.
 ```{r}
 POPmix_samplesheet <- read_csv("../data_AFSC/samplesheets/20230110_POPMix_POP_PCOD_BFAL.csv", skip = 19)
 
-meta_spp <- read_xlsx("../data_AFSC/POP_northerns_duskies_to_gtseq.xlsx")
+meta_spp <- read_csv("../data_AFSC/POP_northerns_duskies_to_gtseq_FIXEDmetadata20230327.csv")
 meta_spp$ABLG <- as.character(meta_spp$ABLG)
 
 # join those to get the species
