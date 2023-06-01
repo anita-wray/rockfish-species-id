@@ -1,0 +1,2 @@
+gtseq_run file
+gtseq3 DIANA--target_fastas--diana--snps4test.rds

@@ -1,0 +1,315 @@
+---
+title: "unknown-species-id-template"
+output: github_document
+---
+
+28 February 2023
+
+
+Walkthrough of species id for unknown samples:
+
+Using the rds file output from microhaplot:
+1. read in rds files
+2. apply read depth filters
+3. apply allele balance filter
+
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(lubridate)
+library(rubias)
+library(ggpattern)
+
+
+source("../R/rockfish-funcs2.R")
+
+
+#### Call genos from the microhaplot rds files ####
+
+# this next step uses a little data frame that has the names and GTSeq run numbers
+# I got that file like this:
+# dsb:rds_files dianabaetscher$ pwd
+# /Users/dianabaetscher/Desktop/NOAA_grad/git-repos/rockfish-species-id/new_baseline_data/feather_files
+# dsb:feather_files dianabaetscher$ ls -l | awk 'BEGIN {print "gtseq_run", "file"} NR >1 && !/posinfo/ {num = $NF; gsub(/gtseq/, "", num); gsub(/[._].*$/, "", num);  print num, $NF}' > ../../data/rds-file-list.txt 
+
+# get the names of the files
+fdf <- read.table("../data_AFSC/rds_files/anita/rds-file-list.txt", stringsAsFactors = FALSE, header = TRUE) %>%
+  tbl_df()
+dir <- "../data_AFSC/rds_files/anita/select_for_analysis/"
+
+
+# cycle over them, read them and add the gtseq_run column on each.
+# at the end, bind them together.
+genos_long <- lapply(1:nrow(fdf), function(i) {
+  message("Working on ", fdf$file[i])
+  call_genos_from_haplotRDS(path = file.path(dir, fdf$file[i])) %>%
+    mutate(gtseq_run = fdf$gtseq_run[i]) %>%
+    select(gtseq_run, everything())
+}) %>%
+  bind_rows()
+
+#genos_long$id <- gsub('-','',genos_long$id)
+
+# we go ahead and save it in data/processed, with xz compression
+saveRDS(genos_long, file = "../data_AFSC/processed/called_genos_anita.rds", compress = "xz")
+
+
+#### In the end, let us get a data frame that includes genotypes for all the individuals  ####
+# and which explicitly has NAs in places where data are missing, and also 
+# has the NMFS_DNA_ID on there
+genos_long_explicit_NAs <- genos_long %>%
+  select(gtseq_run, id) %>%
+  unique() %>%
+  unite(col = gid, sep = "_", gtseq_run, id) %>%
+  select(gid) %>%
+  unlist() %>%
+  unname() %>%
+  expand.grid(gid = ., locus = unique(genos_long$locus), gene_copy = 1:2, stringsAsFactors = FALSE) %>%
+  tibble::as_tibble() %>% 
+  separate(gid, into = c("gtseq_run", "id"), convert = TRUE, sep = '_') %>%
+  left_join(., genos_long) %>%
+  arrange(gtseq_run, id, locus, gene_copy)
+
+# and then save that
+saveRDS(genos_long_explicit_NAs, file = "../data_AFSC/processed/called_genos_na_explicit_anita.rds", compress = "xz")
+  
+```
+
+
+Using those genotypes...
+```{r}
+genos_long_explicit_NAs %>%
+  group_by(gtseq_run, id) %>%
+  tally() 
+
+```
+286 samples
+
+
+Look at missing data:
+180 gene copies total (90 loci x2)
+```{r}
+ind_to_toss <- genos_long_explicit_NAs %>%
+  group_by(gtseq_run, id) %>%
+  filter(is.na(allele)) %>% # missing data
+  tally() %>%
+  arrange(desc(n)) %>% # remove samples with >20% missing data
+  filter(n > 72)
+
+# remove those from the df
+genos_ind_filtered <- genos_long_explicit_NAs %>%
+  anti_join(., ind_to_toss)
+
+table(length(unique(genos_ind_filtered$id)))
+  
+```
+
+
+
+Load baseline data
+```{r baseline-data}
+# baseline data - curated, 997 indivs
+baseline <- readRDS("../new_baseline_data/processed/sebastes_spp_id_baseline_haplotypes.rds")
+
+# remove the 6 loci that had HWE and other issues
+to_remove <- read_csv("../data/loci_to_remove.csv")
+
+baseline90 <- baseline %>%
+  anti_join(., to_remove)
+
+# remind myself which species are in the baseline:
+baseline90 %>%
+  select(collection) %>%
+  unique() %>%
+  arrange()
+
+tossers <- baseline90 %>%
+  select(indiv, gtseq_run, id) %>%
+  unique() %>%
+  group_by(indiv) %>%
+  tally() %>%
+  filter(n >1)
+
+baseline90_one_each <- baseline90 %>%
+  anti_join(., tossers)
+
+# baseline data - curated, 997 indivs
+baseline_spp_info <- baseline90_one_each %>%
+  select(sample_type, repunit, collection, indiv, gtseq_run, id, species) %>%
+  unique()
+baseline_spp_info$gtseq_run <- as.character(baseline_spp_info$gtseq_run)
+
+```
+
+
+
+```{r baseline-format}
+# slim that down to just the matching field with the unknowns
+for_alleidx <- baseline90_one_each %>%
+  select(-indiv, -c(1:3, 12:13), -species)
+  
+
+for_alleidx$gtseq_run <- as.character(for_alleidx$gtseq_run)
+```
+
+
+
+```{r}
+# merge the two dataframes
+merged_df <- bind_rows(for_alleidx, genos_ind_filtered)
+
+# first make integers of the alleles
+alle_idxs <- merged_df %>% 
+  dplyr::select(gtseq_run, id, locus, gene_copy, allele) %>%
+  group_by(locus) %>%
+  mutate(alleidx = as.integer(factor(allele, levels = unique(allele)))) %>%
+  ungroup() %>%
+  arrange(gtseq_run, id, locus, alleidx) # rubias can handle NA's, so no need to change them to 0's
+
+  
+# and spread the alleles
+two_col <- alle_idxs %>%
+  #group_by(indiv, locus) %>%
+  unite(loc, locus, gene_copy, sep = ".") %>%
+  #ungroup() %>%
+  select(-allele) %>%
+  pivot_wider(names_from = loc, values_from = alleidx) 
+
+
+```
+
+
+
+add back on info for reference and make two-column format for rubias
+```{r}
+# baseline
+reference <- two_col %>%
+  left_join(., baseline_spp_info) %>%
+  filter(!is.na(species)) %>%
+  select(-gtseq_run, -id, -species) %>%
+  select(sample_type, repunit, collection, indiv, everything())
+
+```
+
+```{r}
+# mixture
+rubias_mix <- two_col %>%
+  anti_join(., baseline_spp_info) %>%
+  mutate(sample_type = "mixture", collection = "krista", repunit = NA) %>%
+  select(sample_type, repunit, collection, everything()) %>%
+  unite(gtseq_run, id, col = "indiv", sep = "_")
+
+```
+
+## Mixture assignment with rubias
+
+
+```{r run-rubias}
+rubias_output <- infer_mixture(reference = reference, mixture = rubias_mix, gen_start_col = 5)
+
+```
+
+
+
+```{r}
+# take the top output for each sample
+top_assign <- rubias_output$indiv_posteriors %>%
+  group_by(indiv) %>%
+  slice_max(., order_by = PofZ)
+
+
+top_assign
+df <- apply(top_assign,2,as.character)
+write.csv(df, file = '~/Desktop/VermilionRF/github-repo/rockfish-species-id/krista_cryptic_05012023.csv')
+```
+
+Check on z-scores:
+
+```{r}
+top_assign %>%
+  ggplot(aes(x = z_score)) +
+  geom_histogram()
+
+ggsave("pdf_outputs/larvae_mixed_unknowns_Zscores.pdf")
+```
+
+
+```{r}
+
+####Basic PCA#####
+
+library(tidyverse)
+library(vcfR)
+library(plotly)
+library(adegenet)
+library(ggrepel)
+library(readxl)
+
+setwd('~/Desktop/VermilionRF/github-repo/mega-simple-microhap-snakeflow/rockfish/NWC-Rockfish/')
+# File to be used
+my_vcf <-  read.vcfR("./vcfs/DIANA/target_fasta/diana/variants-bcftools.vcf")
+my_genind <- vcfR2genind(my_vcf)
+
+# probably only need to retain 3 factors (nf = 3) if potential hybrids or mis id'd
+# species are excluded from QF inds by Z flag (flagged inds)
+rf_QF_panel_GTs_scaled <- scaleGen(my_genind, NA.method="mean")
+rf_QF_panel_GTs_pca <- dudi.pca(rf_QF_panel_GTs_scaled, cent = FALSE, scale = FALSE, scannf = F, nf = 10)
+
+## visualize eigenvalues
+barplot(rf_QF_panel_GTs_pca$eig[1:50], main = "PCA eigenvalues")
+
+# save PCA results as data frame
+rf_pcscores <- as.data.frame(rf_QF_panel_GTs_pca$li) %>%
+  rownames_to_column(var = "sample_id")
+
+#Add in FieldID
+metadata <- read_csv('~/Desktop/VermilionRF/github-repo/rockfish-species-id/krista_cryptic_05012023.csv') %>%
+  select(c('indiv', 'repunit'))
+
+metadata$indiv <- gsub('gtseq3_', '',metadata$indiv)
+
+
+
+rf_pcscores_repunit <- merge(x = rf_pcscores,
+                             y = metadata,
+                             by.x = 'sample_id',
+                             by.y = 'indiv')
+
+
+rf_pcscores_fieldID_sunset <- read_xlsx('~/Desktop/VermilionRF/metadata/H&L-WCGBTS Combined_Vermilion RF Finclip Metadata_SK_05312023_AW.xlsx') %>%
+  subset(`repunit/Species Call` == 'sunset') %>%
+  subset(`Specimen.Num` %in% rf_pcscores_repunit$sample_id)
+
+rf_pcscores_fieldID_sunset$Field.ID <- 'crocotulus'
+
+rf_pcscores_repunit$repunit[match(rf_pcscores_fieldID_sunset$Specimen.Num,
+                                  rf_pcscores_repunit$sample_id)] <- rf_pcscores_fieldID_sunset$Field.ID
+
+# Calculate percent eigenvalues for each principle component
+rf_QF_panel_eig <- round((rf_QF_panel_GTs_pca$eig/(sum(rf_QF_panel_GTs_pca$eig)))*100,2)
+
+colors <- c('#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00','#999999','#a65628','#f781bf')
+
+p1 <- ggplot(rf_pcscores_repunit, aes(Axis1, Axis2, color = repunit)) +
+  geom_point() +
+  xlab(paste0("PC1 (",rf_QF_panel_eig[1],")%", collapse = "")) +
+  ylab(paste0("PC2 (",rf_QF_panel_eig[2],")%", collapse = "")) +
+  theme_bw(base_size = 10) +
+  scale_color_manual(values = colors)
+
+
+ggplotly(p1)
+```
+
+
+
+
+
+
+
+
+
+
+
